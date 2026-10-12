@@ -16,6 +16,8 @@ From this repository, run the command.
 node src/cli.ts
 ```
 
+`npm run build` writes `dist`. The published package runs `dist/cli.js`, because Node does not strip TypeScript inside `node_modules`.
+
 The npm package is not published yet. After it is published, run `npx poddrill`.
 
 ## Workspace

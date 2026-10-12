@@ -6,10 +6,10 @@
   "author": "Jianyu Zhao",
   "type": "module",
   "bin": {
-    "poddrill": "src/cli.ts"
+    "poddrill": "dist/cli.js"
   },
   "files": [
-    "src"
+    "dist"
   ],
   "engines": {
     "node": ">=22.18.0"
@@ -20,9 +20,13 @@
   },
   "cactusNeedle": "3.2.0",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/episode.test.ts test/fleet.test.ts test/idle-fleet.test.ts test/jobs.test.ts test/cues.test.ts test/summary.test.ts test/cli.test.ts test/audit.test.ts test/needle.test.ts test/harness/run.test.ts"
+    "build": "node scripts/build-js.mjs",
+    "test": "node --experimental-strip-types --test test/episode.test.ts test/fleet.test.ts test/idle-fleet.test.ts test/jobs.test.ts test/cues.test.ts test/summary.test.ts test/cli.test.ts test/audit.test.ts test/needle.test.ts test/publish.test.ts test/harness/run.test.ts"
   },
   "dependencies": {
     "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }
