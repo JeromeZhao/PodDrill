@@ -1,29 +1,25 @@
 # PodDrill
 
-PodDrill transcribes episode audio into timed text, groups the voices, and stores a summary.
+PodDrill is a skill that transcribes episode audio into timed text, groups the voices, and stores a summary.
+
+## Say this
+
+Copy this to the agent.
+
+```text
+Set up PodDrill on this computer.
+```
+
+The npm package is `poddrill`. The agent installs that package and the requirements below, then follows the skill shipped in the package.
 
 ## Requirements
 
-Use Node.js 22.18 or newer.
+The computer that runs PodDrill needs Node.js 22.18 or newer, `ffmpeg` on `PATH`, and the Python package `cactus-needle` 3.2.0. The npm package named cactus-needle is a different package.
 
-A transcript also needs ffmpeg and the Python package cactus-needle 3.2.0. That Python package is not the npm package named cactus-needle.
+That computer also needs the ECAPA weights file. The default path is `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. `PODDRILL_EMBED_WEIGHTS` selects another path.
 
-## Run
-
-From this repository, run the command.
-
-```
-node src/cli.ts
-```
-
-`npm run build` writes `dist`. The published package runs `dist/cli.js`, because Node does not strip TypeScript inside `node_modules`.
-
-The npm package is not published yet. After it is published, run `npx poddrill`.
-
-## Workspace
-
-Set `PODDRILL_WORKSPACE` to a directory outside this repository. Then run `poddrill setup` in that directory.
+Grok Bot cannot write its server entry. It prints the custom server to add. Add that server in the Grok Bot chat.
 
 ## License
 
-MIT License. Copyright (c) 2026 Jianyu Zhao.
+MIT License. Copyright 2026 Jianyu Zhao.

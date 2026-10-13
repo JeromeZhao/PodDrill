@@ -4,16 +4,24 @@ description: >-
   Transcribe a podcast episode into timed text, group the voices, and store
   a summary whose paragraphs cite that text. The agent reads the text, names
   the voices, and writes the summary words. PodDrill stores the episode.
-  Use when fetching episode audio, starting a transcript, labeling speakers,
-  or writing a summary. When a session has no PodDrill tools, register the
-  client before transcribing. Do not use it to change the poddrill TypeScript.
+  Use when the user says to set up PodDrill on this computer, when fetching
+  episode audio, starting a transcript, labeling speakers, or writing a summary.
+  When a session has no PodDrill tools, install the requirements, register the
+  client, and set up the workspace before transcribing. Do not use it to change
+  the poddrill TypeScript.
 ---
 
 # PodDrill
 
 PodDrill is a toolset to make transcription and summary of podcast audio streamlined and structured. You may also use it for any other audio. It maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You decide how to use the toolset to answer user's request of audio summary.
 
-Set up a workspace once, when it is missing. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it. Do not reprocess the audio again.
+Find the package, install the requirements, register the client, and set up the workspace once. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it. Do not reprocess the audio again.
+
+## Find the package
+
+The npm package is `poddrill`. Before it is on disk, read the published `version` and use `npx -y poddrill@<version>`. After it is installed, `<version>` is the `version` field in that package's `package.json`. Do not use `@latest`.
+
+Install Node.js 22.18 or newer, `ffmpeg` on `PATH`, and the Python package `cactus-needle` 3.2.0. The npm package named cactus-needle is a different package. Place the ECAPA file at `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`, or set `PODDRILL_EMBED_WEIGHTS` to another path. This package does not install those, and it has no download URL for the ECAPA file.
 
 ## Cues
 
