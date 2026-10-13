@@ -5,7 +5,12 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { asRecord, errorCode, pathExists } from "./disk.js";
 import { embedWeightsPath } from "./embed.js";
+import { MIN_NODE, nodeFixCommand, nodeInstallMessage, nodeMeetsMinimum } from "./node-version.js";
 import { readPackageIdentity } from "./package-identity.js";
+import { providerTransport, refuseUnwiredTransport } from "./provider.js";
+import { INSTALL_PYTHON_FIX, NUMPY_PIN, ONNXRUNTIME_PIN, resolvePython, ytDlpFix } from "./python-env.js";
+import { defaultWorkspacePath, readConfig, resolveWorkspace } from "./workspace.js";
+import { digestStatus, ecapaSpec, FETCH_WEIGHTS_FIX } from "./weights.js";
 const serverName = "poddrill";
 const skillPublishPath = `.agents/skills/${serverName}`;
 const skillNextPrefix = `${serverName}.next-`;
@@ -58,9 +63,9 @@ export async function clientMain(args, env, moduleUrl) {
         case "doctor":
             return outcomeRendered(await doctor(parsed.command.client, identity, home, env));
         case "plan":
-            return outcomeRendered(await resolve(parsed.command.selection, identity, home));
+            return outcomeRendered(await resolve(parsed.command.selection, identity, home, env));
         case "apply":
-            return outcomeRendered(await applyResolved(await resolve(parsed.command.selection, identity, home), identity, home));
+            return outcomeRendered(await applyResolved(await resolve(parsed.command.selection, identity, home, env), identity, home));
         default: {
             const leftover = parsed.command;
             throw new Error(`unexpected command ${JSON.stringify(leftover)}`);
@@ -68,7 +73,7 @@ export async function clientMain(args, env, moduleUrl) {
     }
 }
 async function doctor(client, identity, home, env) {
-    const launcher = launcherFor(identity.spec);
+    const launcher = await launcherFor(identity, env);
     const paths = pathsFor(home);
     const skillText = await readOptionalUtf8(join(identity.root, skillPublishPath, "SKILL.md"));
     const probes = await runtimeProbes(env, identity);
@@ -77,11 +82,11 @@ async function doctor(client, identity, home, env) {
         kind: "doctor",
         client,
         launcher,
-        checks: [skillBundleCheck(skillText), probes[0], probes[1], probes[2], link],
+        checks: [skillBundleCheck(skillText, identity), ...probes, link],
     };
 }
-async function resolve(selection, identity, home) {
-    const launcher = launcherFor(identity.spec);
+async function resolve(selection, identity, home, env) {
+    const launcher = await launcherFor(identity, env);
     const skillPath = join(identity.root, skillPublishPath, "SKILL.md");
     const skillText = await readOptionalUtf8(skillPath);
     if (skillText === undefined) {
@@ -306,15 +311,39 @@ function publishLayoutOk(files) {
     }
     return true;
 }
-function launcherFor(spec) {
-    return { command: "npx", args: ["-y", spec, "mcp"] };
+async function launcherFor(identity, env) {
+    const python = await resolvePython(env, await configuredPython(env));
+    return {
+        command: process.execPath,
+        args: [join(identity.root, "dist", "cli.js"), "mcp"],
+        env: {
+            PATH: env["PATH"] ?? "",
+            PODDRILL_PYTHON: python,
+            PODDRILL_WORKSPACE: defaultWorkspacePath(env),
+            PODDRILL_EMBED_WEIGHTS: embedWeightsPath(env),
+        },
+    };
+}
+async function configuredPython(env) {
+    try {
+        const root = await resolveWorkspace(env);
+        const config = await readConfig(root);
+        return config.python;
+    }
+    catch {
+        return undefined;
+    }
 }
 function bundleDir(identity) {
     return join(identity.root, skillPublishPath);
 }
 function grokBotSentence(launcher) {
-    const commandLine = [launcher.command, ...launcher.args].join(" ");
-    return `Add a custom server named ${serverName} on this computer, running ${commandLine}.`;
+    return [
+        `Add a custom server named ${serverName} on this computer,`,
+        `command ${JSON.stringify(launcher.command)},`,
+        `args ${JSON.stringify(launcher.args)},`,
+        `env ${JSON.stringify(launcher.env)}.`,
+    ].join(" ");
 }
 function skillAgrees(skillText) {
     if (skillText.includes(`${serverName}@latest`) || skillText.includes(`npx -y ${serverName} `)) {
@@ -324,14 +353,14 @@ function skillAgrees(skillText) {
         skillText.includes("client plan") &&
         skillText.includes("client apply --yes"));
 }
-function skillBundleCheck(text) {
+function skillBundleCheck(text, identity) {
     if (text !== undefined && skillAgrees(text)) {
         return { name: "skill-bundle", state: "ok" };
     }
     const detail = text === undefined
         ? "bundled SKILL.md is missing"
         : "bundled SKILL.md does not name the client commands";
-    return { name: "skill-bundle", state: "bad", detail };
+    return { name: "skill-bundle", state: "bad", detail, fix: `npm install -g ${identity.spec}` };
 }
 function writingClients() {
     const found = [];
@@ -558,7 +587,12 @@ async function linkCheckFor(client, paths, launcher) {
         case "cursor":
         case "grok_build": {
             const effect = await writingEffect(client, launcher, paths);
-            return { name: "link", client, record: effect.record };
+            return {
+                name: "link",
+                client,
+                record: effect.record,
+                ...(effect.record.status === "match" ? {} : { fix: linkFix(client) }),
+            };
         }
         default: {
             const leftover = client;
@@ -669,13 +703,22 @@ function writtenEffect(effect) {
         }
     }
 }
+function linkFix(client) {
+    return `poddrill client plan --client ${client} --json && poddrill client apply --yes --client ${client}`;
+}
 function checkFailed(check) {
     switch (check.name) {
         case "skill-bundle":
+        case "node":
         case "ffmpeg":
         case "cactus-needle":
+        case "numpy":
+        case "onnxruntime":
         case "ecapa":
+        case "workspace":
             return check.state === "bad";
+        case "yt-dlp":
+            return false;
         case "link":
             return linkFailed(check);
         default: {
@@ -732,31 +775,119 @@ async function readOptionalUtf8(path) {
     }
 }
 async function runtimeProbes(env, identity) {
+    const python = await resolvePython(env, await configuredPython(env));
+    const node = nodeCheck();
     const ffmpeg = await ffmpegCheck(env);
-    const needle = await needleCheck(env, identity.cactusNeedle);
-    const weights = embedWeightsPath(env);
-    const ecapa = (await pathExists(weights))
-        ? { name: "ecapa", state: "ok", path: weights }
-        : { name: "ecapa", state: "bad", path: weights };
-    return [ffmpeg, needle, ecapa];
+    const needle = await packageCheck(env, python, "cactus-needle", "needle", identity.cactusNeedle);
+    const numpy = await packageCheck(env, python, "numpy", "numpy", NUMPY_PIN);
+    const onnxruntime = await packageCheck(env, python, "onnxruntime", "onnxruntime", ONNXRUNTIME_PIN);
+    const ecapa = await ecapaCheck(env);
+    const workspace = await workspaceCheck(env);
+    const ytdlp = await ytDlpCheck(env, python);
+    return [node, ffmpeg, needle, numpy, onnxruntime, ecapa, workspace, ytdlp];
+}
+function nodeCheck() {
+    const found = process.version;
+    if (nodeMeetsMinimum(process.versions.node)) {
+        return { name: "node", state: "ok", version: found };
+    }
+    return {
+        name: "node",
+        state: "bad",
+        expected: MIN_NODE,
+        found,
+        detail: nodeInstallMessage(found),
+        fix: nodeFixCommand(),
+    };
 }
 async function ffmpegCheck(env) {
     const result = await capture("ffmpeg", ["-version"], env);
     if (result.code === 0) {
         return { name: "ffmpeg", state: "ok" };
     }
-    return { name: "ffmpeg", state: "bad", detail: "ffmpeg is not on PATH" };
+    return {
+        name: "ffmpeg",
+        state: "bad",
+        detail: "ffmpeg is not on PATH",
+        fix: process.platform === "darwin" ? "brew install ffmpeg" : "sudo apt-get install -y ffmpeg",
+    };
 }
-async function needleCheck(env, expected) {
-    const result = await capture("python3", ["-c", "import needle\nprint(needle.__version__)\n"], env);
+async function packageCheck(env, python, name, moduleName, expected) {
+    const result = await capture(python, ["-c", `import ${moduleName}\nprint(${moduleName}.__version__)\n`], env);
     if (result.code !== 0) {
-        return { name: "cactus-needle", state: "bad", expected, found: undefined };
+        return {
+            name,
+            state: "bad",
+            expected,
+            found: undefined,
+            detail: `${moduleName} is not installed for ${python}`,
+            fix: INSTALL_PYTHON_FIX,
+        };
     }
     const found = result.stdout.trim();
     if (found === expected) {
-        return { name: "cactus-needle", state: "ok", version: found };
+        return { name, state: "ok", version: found };
     }
-    return { name: "cactus-needle", state: "bad", expected, found };
+    return {
+        name,
+        state: "bad",
+        expected,
+        found,
+        detail: `${moduleName} ${found} is not ${expected}`,
+        fix: INSTALL_PYTHON_FIX,
+    };
+}
+async function ecapaCheck(env) {
+    const weights = embedWeightsPath(env);
+    const status = await digestStatus(weights, ecapaSpec);
+    if (status === "match") {
+        return { name: "ecapa", state: "ok", path: weights };
+    }
+    const detail = status === "missing"
+        ? "ECAPA weights are missing"
+        : "ECAPA weights do not match the pinned WeSpeaker file";
+    return { name: "ecapa", state: "bad", path: weights, detail, fix: FETCH_WEIGHTS_FIX };
+}
+const SETUP_FIX = "poddrill setup --provider localhost --queue-length 4";
+async function workspaceCheck(env) {
+    const root = defaultWorkspacePath(env);
+    const configPath = join(root, "poddrill.json");
+    if (!(await pathExists(configPath))) {
+        return {
+            name: "workspace",
+            state: "pending",
+            path: root,
+            detail: "No poddrill workspace yet.",
+            fix: SETUP_FIX,
+        };
+    }
+    try {
+        const workspace = await resolveWorkspace(env);
+        const config = await readConfig(workspace);
+        refuseUnwiredTransport(config.provider, providerTransport(config.provider));
+        return { name: "workspace", state: "ok", path: workspace, provider: config.provider };
+    }
+    catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { name: "workspace", state: "bad", path: root, detail, fix: SETUP_FIX };
+    }
+}
+async function ytDlpCheck(env, python) {
+    const binary = await capture("yt-dlp", ["--version"], env);
+    if (binary.code === 0 && binary.stdout.trim() !== "") {
+        return { name: "yt-dlp", state: "ok", version: binary.stdout.trim().split("\n")[0] ?? binary.stdout.trim() };
+    }
+    const module = await capture(python, ["-m", "yt_dlp", "--version"], env);
+    if (module.code === 0 && module.stdout.trim() !== "") {
+        const version = module.stdout.trim().split("\n")[0] ?? module.stdout.trim();
+        return { name: "yt-dlp", state: "ok", version };
+    }
+    return {
+        name: "yt-dlp",
+        state: "optional",
+        detail: "yt-dlp is optional. Install the current release into the PodDrill Python, or use a standalone yt-dlp binary.",
+        fix: ytDlpFix(python),
+    };
 }
 function capture(command, args, env) {
     return new Promise((resolve, reject) => {
@@ -839,17 +970,33 @@ function cursorEntryMatches(value, launcher) {
         return false;
     }
     const keys = Object.keys(record);
-    if (keys.length !== 2 || !keys.includes("command") || !keys.includes("args")) {
+    if (keys.length !== 3 || !keys.includes("command") || !keys.includes("args") || !keys.includes("env")) {
         return false;
     }
     if (record["command"] !== launcher.command) {
         return false;
     }
     const args = stringList(record["args"]);
-    if (args === undefined) {
+    if (args === undefined || !sameStrings(args, launcher.args)) {
         return false;
     }
-    return sameStrings(args, launcher.args);
+    return envMatches(record["env"], launcher.env);
+}
+function envMatches(value, env) {
+    const record = asRecord(value);
+    if (record === undefined) {
+        return false;
+    }
+    const keys = ["PATH", "PODDRILL_PYTHON", "PODDRILL_WORKSPACE", "PODDRILL_EMBED_WEIGHTS"];
+    if (Object.keys(record).length !== keys.length) {
+        return false;
+    }
+    for (const key of keys) {
+        if (record[key] !== env[key]) {
+            return false;
+        }
+    }
+    return true;
 }
 function previousFromCursor(value) {
     const record = asRecord(value);
@@ -899,13 +1046,16 @@ function grokRecord(text, launcher) {
     if (hit === undefined) {
         return { status: "absent" };
     }
+    const index = sections.indexOf(hit);
+    const next = sections[index + 1];
+    const envBody = next !== undefined && isPoddrillEnvTable(next.name) ? next.body : undefined;
     const previous = previousFromToml(hit.body);
-    if (grokBodyMatches(hit.body, launcher, previous)) {
+    if (envBody !== undefined && grokServerMatches(hit.body, launcher, previous) && tomlEnvMatches(envBody, launcher.env)) {
         return { status: "match" };
     }
     return { status: "differ", previous };
 }
-function grokBodyMatches(body, launcher, previous) {
+function grokServerMatches(body, launcher, previous) {
     if (!("startupTimeoutSec" in previous)) {
         return false;
     }
@@ -919,6 +1069,19 @@ function grokBodyMatches(body, launcher, previous) {
     return (previous.command === launcher.command &&
         sameStrings(previous.args, launcher.args) &&
         previous.startupTimeoutSec === GROK_STARTUP_TIMEOUT_SEC);
+}
+function tomlEnvMatches(body, env) {
+    const record = {};
+    for (const line of body.split("\n")) {
+        const match = /^\s*([A-Za-z0-9_]+)\s*=\s*"((?:\\.|[^"\\])*)"\s*(?:#.*)?$/.exec(line);
+        const key = match?.[1];
+        const value = match?.[2];
+        if (key === undefined || value === undefined) {
+            continue;
+        }
+        record[key] = unescapeToml(value);
+    }
+    return envMatches(record, env);
 }
 function previousFromToml(body) {
     let command = "";
@@ -1012,8 +1175,13 @@ function unescapeToml(value) {
     return value.replaceAll(/\\(.)/g, (_match, char) => (char === "n" ? "\n" : char));
 }
 function isPoddrillTable(name) {
-    const compact = name.replaceAll(" ", "").replaceAll("\t", "").replaceAll("\"", "").replaceAll("'", "");
-    return compact === "mcp_servers.poddrill";
+    return compactTomlName(name) === "mcp_servers.poddrill";
+}
+function isPoddrillEnvTable(name) {
+    return compactTomlName(name) === "mcp_servers.poddrill.env";
+}
+function compactTomlName(name) {
+    return name.replaceAll(" ", "").replaceAll("\t", "").replaceAll("\"", "").replaceAll("'", "");
 }
 function scanTomlSections(text) {
     if (text.includes("\"\"\"") || text.includes("'''")) {
@@ -1165,7 +1333,16 @@ function mergeText(current, format, launcher) {
     }
 }
 function mergeCursor(current, launcher) {
-    const entry = { command: launcher.command, args: [...launcher.args] };
+    const entry = {
+        command: launcher.command,
+        args: [...launcher.args],
+        env: {
+            PATH: launcher.env.PATH,
+            PODDRILL_PYTHON: launcher.env.PODDRILL_PYTHON,
+            PODDRILL_WORKSPACE: launcher.env.PODDRILL_WORKSPACE,
+            PODDRILL_EMBED_WEIGHTS: launcher.env.PODDRILL_EMBED_WEIGHTS,
+        },
+    };
     if (current === undefined || current.trim() === "") {
         return `${JSON.stringify({ mcpServers: { [serverName]: entry } }, null, 2)}\n`;
     }
@@ -1189,7 +1366,7 @@ function mergeCursor(current, launcher) {
     return `${JSON.stringify(next, null, 2)}\n`;
 }
 function mergeGrok(current, launcher) {
-    const table = desiredGrokTable(launcher);
+    const table = desiredGrokBlock(launcher);
     if (current === undefined || current.trim() === "") {
         return table;
     }
@@ -1206,15 +1383,24 @@ function mergeGrok(current, launcher) {
         const prefix = current.endsWith("\n") ? current : `${current}\n`;
         return `${prefix}\n${table}`;
     }
-    return `${current.slice(0, hit.headerStart)}${table}${current.slice(hit.bodyEnd)}`;
+    const index = sections.indexOf(hit);
+    const next = sections[index + 1];
+    const end = next !== undefined && isPoddrillEnvTable(next.name) ? next.bodyEnd : hit.bodyEnd;
+    return `${current.slice(0, hit.headerStart)}${table}${current.slice(end)}`;
 }
-function desiredGrokTable(launcher) {
+function desiredGrokBlock(launcher) {
     const args = launcher.args.map((arg) => `"${escapeToml(arg)}"`).join(", ");
     return [
         "[mcp_servers.poddrill]",
         `command = "${escapeToml(launcher.command)}"`,
         `args = [${args}]`,
         `startup_timeout_sec = ${GROK_STARTUP_TIMEOUT_SEC}`,
+        "",
+        "[mcp_servers.poddrill.env]",
+        `PATH = "${escapeToml(launcher.env.PATH)}"`,
+        `PODDRILL_PYTHON = "${escapeToml(launcher.env.PODDRILL_PYTHON)}"`,
+        `PODDRILL_WORKSPACE = "${escapeToml(launcher.env.PODDRILL_WORKSPACE)}"`,
+        `PODDRILL_EMBED_WEIGHTS = "${escapeToml(launcher.env.PODDRILL_EMBED_WEIGHTS)}"`,
         "",
     ].join("\n");
 }

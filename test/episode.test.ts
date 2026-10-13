@@ -9,7 +9,7 @@ import {
   type SliceRecord,
   type WhistleSpeech,
 } from "../src/episode.ts";
-import { openWhistleCall, providerIds } from "../src/provider.ts";
+import { openWhistleCall, providerIds, providerTransport, refuseUnwiredTransport } from "../src/provider.ts";
 import { selectProvider } from "../src/transcribe.ts";
 
 function speech(
@@ -168,17 +168,20 @@ describe("projectSlices", () => {
 });
 
 describe("providers", () => {
-  it("selects a host at setup and does not put the host on the slice plan", async () => {
+  it("selects a local host for every provider and refuses an unwired transport", async () => {
     const profile = selectProvider("cursor-cloud");
     assert.equal(profile.providerId, "cursor-cloud");
     assert.deepEqual(providerIds, ["localhost", "grok-bot", "cursor-cloud"]);
     assert.throws(() => selectProvider("whisper"));
-    const host = openWhistleCall(profile.providerId, { fleetLimit: 1, modelFleet: {}, modelWeights: {} });
-    await assert.rejects(
-      host.transcribeSlice({ sliceIndex: 0, startMs: 0, wavPath: "/tmp/s0.wav", language: "en" }),
-      { message: "cursor-cloud provider transport is not wired" },
-    );
-    await host.close();
+    for (const id of providerIds) {
+      assert.equal(providerTransport(id), "local");
+      const host = openWhistleCall(id, { fleetLimit: 1, modelFleet: {}, modelWeights: {} });
+      await host.close();
+    }
+    assert.throws(() => refuseUnwiredTransport("grok-bot", "unwired"), {
+      message: "grok-bot provider transport is not wired. poddrill setup refuses a provider that cannot transcribe.",
+    });
+    refuseUnwiredTransport("cursor-cloud", "local");
     assert.throws(() => openWhistleCall("localhost", { fleetLimit: 0, modelFleet: {}, modelWeights: {} }), {
       message: "fleet limit must be a positive integer, got 0",
     });

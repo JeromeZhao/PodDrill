@@ -6,7 +6,12 @@ import { basename, dirname, isAbsolute, join, normalize, relative } from "node:p
 
 import { asRecord, errorCode, pathExists } from "./disk.ts";
 import { embedWeightsPath } from "./embed.ts";
+import { MIN_NODE, nodeFixCommand, nodeInstallMessage, nodeMeetsMinimum } from "./node-version.ts";
 import { readPackageIdentity, type PackageIdentity } from "./package-identity.ts";
+import { providerTransport, refuseUnwiredTransport } from "./provider.ts";
+import { INSTALL_PYTHON_FIX, NUMPY_PIN, ONNXRUNTIME_PIN, resolvePython, ytDlpFix } from "./python-env.ts";
+import { defaultWorkspacePath, readConfig, resolveWorkspace } from "./workspace.ts";
+import { digestStatus, ecapaSpec, FETCH_WEIGHTS_FIX } from "./weights.ts";
 
 const serverName = "poddrill";
 
@@ -27,13 +32,19 @@ type ClientId = (typeof clientIds)[number];
 
 type WritingClient = "cursor" | "grok_build";
 
-type PoddrillSpec = PackageIdentity["spec"];
-
 type ClientOp = "doctor" | "plan" | "apply";
 
+interface LauncherEnv {
+  readonly PATH: string;
+  readonly PODDRILL_PYTHON: string;
+  readonly PODDRILL_WORKSPACE: string;
+  readonly PODDRILL_EMBED_WEIGHTS: string;
+}
+
 interface Launcher {
-  readonly command: "npx";
-  readonly args: readonly ["-y", PoddrillSpec, "mcp"];
+  readonly command: string;
+  readonly args: readonly [string, "mcp"];
+  readonly env: LauncherEnv;
 }
 
 type ClientSelection =
@@ -132,21 +143,50 @@ type Applied = {
   readonly results: readonly AppliedEffect[];
 };
 
+type PackageCheckName = "cactus-needle" | "numpy" | "onnxruntime";
+
 type DoctorCheck =
   | { readonly name: "skill-bundle"; readonly state: "ok" }
-  | { readonly name: "skill-bundle"; readonly state: "bad"; readonly detail: string }
-  | { readonly name: "ffmpeg"; readonly state: "ok" }
-  | { readonly name: "ffmpeg"; readonly state: "bad"; readonly detail: string }
-  | { readonly name: "cactus-needle"; readonly state: "ok"; readonly version: string }
+  | { readonly name: "skill-bundle"; readonly state: "bad"; readonly detail: string; readonly fix: string }
+  | { readonly name: "node"; readonly state: "ok"; readonly version: string }
   | {
-      readonly name: "cactus-needle";
+      readonly name: "node";
+      readonly state: "bad";
+      readonly expected: string;
+      readonly found: string;
+      readonly detail: string;
+      readonly fix: string;
+    }
+  | { readonly name: "ffmpeg"; readonly state: "ok" }
+  | { readonly name: "ffmpeg"; readonly state: "bad"; readonly detail: string; readonly fix: string }
+  | { readonly name: PackageCheckName; readonly state: "ok"; readonly version: string }
+  | {
+      readonly name: PackageCheckName;
       readonly state: "bad";
       readonly expected: string;
       readonly found: string | undefined;
+      readonly detail: string;
+      readonly fix: string;
     }
   | { readonly name: "ecapa"; readonly state: "ok"; readonly path: string }
-  | { readonly name: "ecapa"; readonly state: "bad"; readonly path: string }
-  | { readonly name: "link"; readonly client: WritingClient; readonly record: ServerRecord }
+  | {
+      readonly name: "ecapa";
+      readonly state: "bad";
+      readonly path: string;
+      readonly detail: string;
+      readonly fix: string;
+    }
+  | { readonly name: "workspace"; readonly state: "ok"; readonly path: string; readonly provider: string }
+  | {
+      readonly name: "workspace";
+      readonly state: "pending" | "bad";
+      readonly path: string;
+      readonly detail: string;
+      readonly fix: string;
+    }
+  | { readonly name: "yt-dlp"; readonly state: "ok"; readonly version: string }
+  | { readonly name: "yt-dlp"; readonly state: "optional"; readonly detail: string; readonly fix: string }
+  | { readonly name: "link"; readonly client: WritingClient; readonly record: ServerRecord; readonly fix?: string }
   | { readonly name: "link"; readonly client: "grok_bot"; readonly sentence: string };
 
 type DoctorReport = {
@@ -171,11 +211,6 @@ type ClientRefusal =
 
 type ClientOutcome = ClientPlan | Applied | NothingLinked | DoctorReport | ClientRefusal;
 
-type RuntimeReport = readonly [
-  Extract<DoctorCheck, { readonly name: "ffmpeg" }>,
-  Extract<DoctorCheck, { readonly name: "cactus-needle" }>,
-  Extract<DoctorCheck, { readonly name: "ecapa" }>,
-];
 
 interface ClientPaths {
   readonly skillDest: string;
@@ -262,10 +297,10 @@ export async function clientMain(
     case "doctor":
       return outcomeRendered(await doctor(parsed.command.client, identity, home, env));
     case "plan":
-      return outcomeRendered(await resolve(parsed.command.selection, identity, home));
+      return outcomeRendered(await resolve(parsed.command.selection, identity, home, env));
     case "apply":
       return outcomeRendered(
-        await applyResolved(await resolve(parsed.command.selection, identity, home), identity, home),
+        await applyResolved(await resolve(parsed.command.selection, identity, home, env), identity, home),
       );
     default: {
       const leftover: never = parsed.command;
@@ -280,7 +315,7 @@ async function doctor(
   home: string,
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<DoctorReport> {
-  const launcher = launcherFor(identity.spec);
+  const launcher = await launcherFor(identity, env);
   const paths = pathsFor(home);
   const skillText = await readOptionalUtf8(join(identity.root, skillPublishPath, "SKILL.md"));
   const probes = await runtimeProbes(env, identity);
@@ -289,7 +324,7 @@ async function doctor(
     kind: "doctor",
     client,
     launcher,
-    checks: [skillBundleCheck(skillText), probes[0], probes[1], probes[2], link],
+    checks: [skillBundleCheck(skillText, identity), ...probes, link],
   };
 }
 
@@ -297,8 +332,9 @@ async function resolve(
   selection: ClientSelection,
   identity: PackageIdentity,
   home: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ClientPlan | NothingLinked | ClientRefusal> {
-  const launcher = launcherFor(identity.spec);
+  const launcher = await launcherFor(identity, env);
   const skillPath = join(identity.root, skillPublishPath, "SKILL.md");
   const skillText = await readOptionalUtf8(skillPath);
   if (skillText === undefined) {
@@ -542,8 +578,31 @@ function publishLayoutOk(files: readonly string[]): boolean {
   return true;
 }
 
-function launcherFor(spec: PoddrillSpec): Launcher {
-  return { command: "npx", args: ["-y", spec, "mcp"] };
+async function launcherFor(
+  identity: PackageIdentity,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<Launcher> {
+  const python = await resolvePython(env, await configuredPython(env));
+  return {
+    command: process.execPath,
+    args: [join(identity.root, "dist", "cli.js"), "mcp"],
+    env: {
+      PATH: env["PATH"] ?? "",
+      PODDRILL_PYTHON: python,
+      PODDRILL_WORKSPACE: defaultWorkspacePath(env),
+      PODDRILL_EMBED_WEIGHTS: embedWeightsPath(env),
+    },
+  };
+}
+
+async function configuredPython(env: Readonly<Record<string, string | undefined>>): Promise<string | undefined> {
+  try {
+    const root = await resolveWorkspace(env);
+    const config = await readConfig(root);
+    return config.python;
+  } catch {
+    return undefined;
+  }
 }
 
 function bundleDir(identity: PackageIdentity): string {
@@ -551,8 +610,12 @@ function bundleDir(identity: PackageIdentity): string {
 }
 
 function grokBotSentence(launcher: Launcher): string {
-  const commandLine = [launcher.command, ...launcher.args].join(" ");
-  return `Add a custom server named ${serverName} on this computer, running ${commandLine}.`;
+  return [
+    `Add a custom server named ${serverName} on this computer,`,
+    `command ${JSON.stringify(launcher.command)},`,
+    `args ${JSON.stringify(launcher.args)},`,
+    `env ${JSON.stringify(launcher.env)}.`,
+  ].join(" ");
 }
 
 function skillAgrees(skillText: string): boolean {
@@ -566,7 +629,7 @@ function skillAgrees(skillText: string): boolean {
   );
 }
 
-function skillBundleCheck(text: string | undefined): DoctorCheck {
+function skillBundleCheck(text: string | undefined, identity: PackageIdentity): DoctorCheck {
   if (text !== undefined && skillAgrees(text)) {
     return { name: "skill-bundle", state: "ok" };
   }
@@ -574,7 +637,7 @@ function skillBundleCheck(text: string | undefined): DoctorCheck {
     text === undefined
       ? "bundled SKILL.md is missing"
       : "bundled SKILL.md does not name the client commands";
-  return { name: "skill-bundle", state: "bad", detail };
+  return { name: "skill-bundle", state: "bad", detail, fix: `npm install -g ${identity.spec}` };
 }
 
 function writingClients(): readonly WritingClient[] {
@@ -825,7 +888,12 @@ async function linkCheckFor(client: ClientId, paths: ClientPaths, launcher: Laun
     case "cursor":
     case "grok_build": {
       const effect = await writingEffect(client, launcher, paths);
-      return { name: "link", client, record: effect.record };
+      return {
+        name: "link",
+        client,
+        record: effect.record,
+        ...(effect.record.status === "match" ? {} : { fix: linkFix(client) }),
+      };
     }
     default: {
       const leftover: never = client;
@@ -947,13 +1015,23 @@ function writtenEffect(effect: CursorEffect | GrokEffect): AppliedEffect {
   }
 }
 
+function linkFix(client: WritingClient): string {
+  return `poddrill client plan --client ${client} --json && poddrill client apply --yes --client ${client}`;
+}
+
 function checkFailed(check: DoctorCheck): boolean {
   switch (check.name) {
     case "skill-bundle":
+    case "node":
     case "ffmpeg":
     case "cactus-needle":
+    case "numpy":
+    case "onnxruntime":
     case "ecapa":
+    case "workspace":
       return check.state === "bad";
+    case "yt-dlp":
+      return false;
     case "link":
       return linkFailed(check);
     default: {
@@ -1017,39 +1095,136 @@ async function readOptionalUtf8(path: string): Promise<string | undefined> {
 async function runtimeProbes(
   env: Readonly<Record<string, string | undefined>>,
   identity: PackageIdentity,
-): Promise<RuntimeReport> {
+): Promise<readonly DoctorCheck[]> {
+  const python = await resolvePython(env, await configuredPython(env));
+  const node = nodeCheck();
   const ffmpeg = await ffmpegCheck(env);
-  const needle = await needleCheck(env, identity.cactusNeedle);
-  const weights = embedWeightsPath(env);
-  const ecapa: Extract<DoctorCheck, { readonly name: "ecapa" }> = (await pathExists(weights))
-    ? { name: "ecapa", state: "ok", path: weights }
-    : { name: "ecapa", state: "bad", path: weights };
-  return [ffmpeg, needle, ecapa];
+  const needle = await packageCheck(env, python, "cactus-needle", "needle", identity.cactusNeedle);
+  const numpy = await packageCheck(env, python, "numpy", "numpy", NUMPY_PIN);
+  const onnxruntime = await packageCheck(env, python, "onnxruntime", "onnxruntime", ONNXRUNTIME_PIN);
+  const ecapa = await ecapaCheck(env);
+  const workspace = await workspaceCheck(env);
+  const ytdlp = await ytDlpCheck(env, python);
+  return [node, ffmpeg, needle, numpy, onnxruntime, ecapa, workspace, ytdlp];
 }
 
-async function ffmpegCheck(env: Readonly<Record<string, string | undefined>>): Promise<
-  Extract<DoctorCheck, { readonly name: "ffmpeg" }>
-> {
+function nodeCheck(): DoctorCheck {
+  const found = process.version;
+  if (nodeMeetsMinimum(process.versions.node)) {
+    return { name: "node", state: "ok", version: found };
+  }
+  return {
+    name: "node",
+    state: "bad",
+    expected: MIN_NODE,
+    found,
+    detail: nodeInstallMessage(found),
+    fix: nodeFixCommand(),
+  };
+}
+
+async function ffmpegCheck(env: Readonly<Record<string, string | undefined>>): Promise<DoctorCheck> {
   const result = await capture("ffmpeg", ["-version"], env);
   if (result.code === 0) {
     return { name: "ffmpeg", state: "ok" };
   }
-  return { name: "ffmpeg", state: "bad", detail: "ffmpeg is not on PATH" };
+  return {
+    name: "ffmpeg",
+    state: "bad",
+    detail: "ffmpeg is not on PATH",
+    fix: process.platform === "darwin" ? "brew install ffmpeg" : "sudo apt-get install -y ffmpeg",
+  };
 }
 
-async function needleCheck(
+async function packageCheck(
   env: Readonly<Record<string, string | undefined>>,
+  python: string,
+  name: PackageCheckName,
+  moduleName: string,
   expected: string,
-): Promise<Extract<DoctorCheck, { readonly name: "cactus-needle" }>> {
-  const result = await capture("python3", ["-c", "import needle\nprint(needle.__version__)\n"], env);
+): Promise<DoctorCheck> {
+  const result = await capture(python, ["-c", `import ${moduleName}\nprint(${moduleName}.__version__)\n`], env);
   if (result.code !== 0) {
-    return { name: "cactus-needle", state: "bad", expected, found: undefined };
+    return {
+      name,
+      state: "bad",
+      expected,
+      found: undefined,
+      detail: `${moduleName} is not installed for ${python}`,
+      fix: INSTALL_PYTHON_FIX,
+    };
   }
   const found = result.stdout.trim();
   if (found === expected) {
-    return { name: "cactus-needle", state: "ok", version: found };
+    return { name, state: "ok", version: found };
   }
-  return { name: "cactus-needle", state: "bad", expected, found };
+  return {
+    name,
+    state: "bad",
+    expected,
+    found,
+    detail: `${moduleName} ${found} is not ${expected}`,
+    fix: INSTALL_PYTHON_FIX,
+  };
+}
+
+async function ecapaCheck(env: Readonly<Record<string, string | undefined>>): Promise<DoctorCheck> {
+  const weights = embedWeightsPath(env);
+  const status = await digestStatus(weights, ecapaSpec);
+  if (status === "match") {
+    return { name: "ecapa", state: "ok", path: weights };
+  }
+  const detail =
+    status === "missing"
+      ? "ECAPA weights are missing"
+      : "ECAPA weights do not match the pinned WeSpeaker file";
+  return { name: "ecapa", state: "bad", path: weights, detail, fix: FETCH_WEIGHTS_FIX };
+}
+
+const SETUP_FIX = "poddrill setup --provider localhost --queue-length 4";
+
+async function workspaceCheck(env: Readonly<Record<string, string | undefined>>): Promise<DoctorCheck> {
+  const root = defaultWorkspacePath(env);
+  const configPath = join(root, "poddrill.json");
+  if (!(await pathExists(configPath))) {
+    return {
+      name: "workspace",
+      state: "pending",
+      path: root,
+      detail: "No poddrill workspace yet.",
+      fix: SETUP_FIX,
+    };
+  }
+  try {
+    const workspace = await resolveWorkspace(env);
+    const config = await readConfig(workspace);
+    refuseUnwiredTransport(config.provider, providerTransport(config.provider));
+    return { name: "workspace", state: "ok", path: workspace, provider: config.provider };
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { name: "workspace", state: "bad", path: root, detail, fix: SETUP_FIX };
+  }
+}
+
+async function ytDlpCheck(
+  env: Readonly<Record<string, string | undefined>>,
+  python: string,
+): Promise<DoctorCheck> {
+  const binary = await capture("yt-dlp", ["--version"], env);
+  if (binary.code === 0 && binary.stdout.trim() !== "") {
+    return { name: "yt-dlp", state: "ok", version: binary.stdout.trim().split("\n")[0] ?? binary.stdout.trim() };
+  }
+  const module = await capture(python, ["-m", "yt_dlp", "--version"], env);
+  if (module.code === 0 && module.stdout.trim() !== "") {
+    const version = module.stdout.trim().split("\n")[0] ?? module.stdout.trim();
+    return { name: "yt-dlp", state: "ok", version };
+  }
+  return {
+    name: "yt-dlp",
+    state: "optional",
+    detail: "yt-dlp is optional. Install the current release into the PodDrill Python, or use a standalone yt-dlp binary.",
+    fix: ytDlpFix(python),
+  };
 }
 
 function capture(
@@ -1140,17 +1315,34 @@ function cursorEntryMatches(value: unknown, launcher: Launcher): boolean {
     return false;
   }
   const keys = Object.keys(record);
-  if (keys.length !== 2 || !keys.includes("command") || !keys.includes("args")) {
+  if (keys.length !== 3 || !keys.includes("command") || !keys.includes("args") || !keys.includes("env")) {
     return false;
   }
   if (record["command"] !== launcher.command) {
     return false;
   }
   const args = stringList(record["args"]);
-  if (args === undefined) {
+  if (args === undefined || !sameStrings(args, launcher.args)) {
     return false;
   }
-  return sameStrings(args, launcher.args);
+  return envMatches(record["env"], launcher.env);
+}
+
+function envMatches(value: unknown, env: LauncherEnv): boolean {
+  const record = asRecord(value);
+  if (record === undefined) {
+    return false;
+  }
+  const keys = ["PATH", "PODDRILL_PYTHON", "PODDRILL_WORKSPACE", "PODDRILL_EMBED_WEIGHTS"] as const;
+  if (Object.keys(record).length !== keys.length) {
+    return false;
+  }
+  for (const key of keys) {
+    if (record[key] !== env[key]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function previousFromCursor(value: unknown): PreviousEntry {
@@ -1204,14 +1396,17 @@ function grokRecord(text: string | undefined, launcher: Launcher): ServerRecord 
   if (hit === undefined) {
     return { status: "absent" };
   }
+  const index = sections.indexOf(hit);
+  const next = sections[index + 1];
+  const envBody = next !== undefined && isPoddrillEnvTable(next.name) ? next.body : undefined;
   const previous = previousFromToml(hit.body);
-  if (grokBodyMatches(hit.body, launcher, previous)) {
+  if (envBody !== undefined && grokServerMatches(hit.body, launcher, previous) && tomlEnvMatches(envBody, launcher.env)) {
     return { status: "match" };
   }
   return { status: "differ", previous };
 }
 
-function grokBodyMatches(body: string, launcher: Launcher, previous: PreviousEntry): boolean {
+function grokServerMatches(body: string, launcher: Launcher, previous: PreviousEntry): boolean {
   if (!("startupTimeoutSec" in previous)) {
     return false;
   }
@@ -1227,6 +1422,20 @@ function grokBodyMatches(body: string, launcher: Launcher, previous: PreviousEnt
     sameStrings(previous.args, launcher.args) &&
     previous.startupTimeoutSec === GROK_STARTUP_TIMEOUT_SEC
   );
+}
+
+function tomlEnvMatches(body: string, env: LauncherEnv): boolean {
+  const record: Record<string, string> = {};
+  for (const line of body.split("\n")) {
+    const match = /^\s*([A-Za-z0-9_]+)\s*=\s*"((?:\\.|[^"\\])*)"\s*(?:#.*)?$/.exec(line);
+    const key = match?.[1];
+    const value = match?.[2];
+    if (key === undefined || value === undefined) {
+      continue;
+    }
+    record[key] = unescapeToml(value);
+  }
+  return envMatches(record, env);
 }
 
 function previousFromToml(body: string): PreviousEntry {
@@ -1325,8 +1534,15 @@ function unescapeToml(value: string): string {
 }
 
 function isPoddrillTable(name: string): boolean {
-  const compact = name.replaceAll(" ", "").replaceAll("\t", "").replaceAll("\"", "").replaceAll("'", "");
-  return compact === "mcp_servers.poddrill";
+  return compactTomlName(name) === "mcp_servers.poddrill";
+}
+
+function isPoddrillEnvTable(name: string): boolean {
+  return compactTomlName(name) === "mcp_servers.poddrill.env";
+}
+
+function compactTomlName(name: string): string {
+  return name.replaceAll(" ", "").replaceAll("\t", "").replaceAll("\"", "").replaceAll("'", "");
 }
 
 function scanTomlSections(text: string): readonly TomlSection[] | undefined {
@@ -1492,7 +1708,16 @@ function mergeText(
 }
 
 function mergeCursor(current: string | undefined, launcher: Launcher): string | { readonly detail: string } {
-  const entry = { command: launcher.command, args: [...launcher.args] };
+  const entry = {
+    command: launcher.command,
+    args: [...launcher.args],
+    env: {
+      PATH: launcher.env.PATH,
+      PODDRILL_PYTHON: launcher.env.PODDRILL_PYTHON,
+      PODDRILL_WORKSPACE: launcher.env.PODDRILL_WORKSPACE,
+      PODDRILL_EMBED_WEIGHTS: launcher.env.PODDRILL_EMBED_WEIGHTS,
+    },
+  };
   if (current === undefined || current.trim() === "") {
     return `${JSON.stringify({ mcpServers: { [serverName]: entry } }, null, 2)}\n`;
   }
@@ -1516,7 +1741,7 @@ function mergeCursor(current: string | undefined, launcher: Launcher): string | 
 }
 
 function mergeGrok(current: string | undefined, launcher: Launcher): string | { readonly detail: string } {
-  const table = desiredGrokTable(launcher);
+  const table = desiredGrokBlock(launcher);
   if (current === undefined || current.trim() === "") {
     return table;
   }
@@ -1533,16 +1758,25 @@ function mergeGrok(current: string | undefined, launcher: Launcher): string | { 
     const prefix = current.endsWith("\n") ? current : `${current}\n`;
     return `${prefix}\n${table}`;
   }
-  return `${current.slice(0, hit.headerStart)}${table}${current.slice(hit.bodyEnd)}`;
+  const index = sections.indexOf(hit);
+  const next = sections[index + 1];
+  const end = next !== undefined && isPoddrillEnvTable(next.name) ? next.bodyEnd : hit.bodyEnd;
+  return `${current.slice(0, hit.headerStart)}${table}${current.slice(end)}`;
 }
 
-function desiredGrokTable(launcher: Launcher): string {
+function desiredGrokBlock(launcher: Launcher): string {
   const args = launcher.args.map((arg) => `"${escapeToml(arg)}"`).join(", ");
   return [
     "[mcp_servers.poddrill]",
     `command = "${escapeToml(launcher.command)}"`,
     `args = [${args}]`,
     `startup_timeout_sec = ${GROK_STARTUP_TIMEOUT_SEC}`,
+    "",
+    "[mcp_servers.poddrill.env]",
+    `PATH = "${escapeToml(launcher.env.PATH)}"`,
+    `PODDRILL_PYTHON = "${escapeToml(launcher.env.PODDRILL_PYTHON)}"`,
+    `PODDRILL_WORKSPACE = "${escapeToml(launcher.env.PODDRILL_WORKSPACE)}"`,
+    `PODDRILL_EMBED_WEIGHTS = "${escapeToml(launcher.env.PODDRILL_EMBED_WEIGHTS)}"`,
     "",
   ].join("\n");
 }

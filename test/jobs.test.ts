@@ -993,7 +993,7 @@ describe("JobQueue embedding", () => {
       await writeFile(wavPath, bytes);
       await queue.start(wavPath);
       await waitFor(() => stateOf(queue.episode(id), "embedding") === "failed");
-      const message = `ECAPA weights are missing at ${weights}. Put the file there or set PODDRILL_EMBED_WEIGHTS.`;
+      const message = `ECAPA weights are missing at ${weights}. Run poddrill fetch-weights or set PODDRILL_EMBED_WEIGHTS.`;
       assert.deepEqual(
         queue.episode(id),
         present(workspace, id, 6_000, transcriptReady(workspace, id), { state: "failed", progress: 0, message }),
@@ -1407,7 +1407,7 @@ describe("episode language", () => {
     ]);
   });
 
-  it("reports a missing moonshine_voice module as pip install moonshine-voice", async () => {
+  it("reports a missing moonshine_voice module as a PodDrill Python install", async () => {
     const workspace = await openWorkspace(1);
     const weights = join(workspace.dir, "moonshine-tiny-ja");
     const host = openWhistleCall(
@@ -1447,7 +1447,7 @@ describe("episode language", () => {
         artifact: "transcript",
         state: "failed",
         progress: 0,
-        message: "pip install moonshine-voice",
+        message: "Install moonshine-voice into the PodDrill Python: \"$PODDRILL_PYTHON\" -m pip install moonshine-voice",
       });
       assert.equal(await fileExists(weights), false);
     } finally {

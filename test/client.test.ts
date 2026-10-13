@@ -7,8 +7,33 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { clientMain } from "../src/client.ts";
+import { NUMPY_PIN, ONNXRUNTIME_PIN } from "../src/python-env.ts";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+
+function expectedLauncher(home: string, options?: { readonly path?: string; readonly weights?: string }) {
+  return {
+    command: process.execPath,
+    args: [join(repoRoot, "dist", "cli.js"), "mcp"],
+    env: {
+      PATH: options?.path ?? "",
+      PODDRILL_PYTHON: "python3",
+      PODDRILL_WORKSPACE: join(home, "poddrill"),
+      PODDRILL_EMBED_WEIGHTS:
+        options?.weights ?? join(home, ".cache", "poddrill", "ecapa", "voxceleb_ECAPA512.onnx"),
+    },
+  };
+}
+
+function grokSentence(home: string): string {
+  const launcher = expectedLauncher(home);
+  return [
+    "Add a custom server named poddrill on this computer,",
+    `command ${JSON.stringify(launcher.command)},`,
+    `args ${JSON.stringify(launcher.args)},`,
+    `env ${JSON.stringify(launcher.env)}.`,
+  ].join(" ");
+}
 const moduleUrl = new URL("../src/cli.ts", import.meta.url).href;
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
@@ -24,11 +49,10 @@ describe("poddrill client", () => {
     try {
       const before = await treeSnapshot(home);
       const rendered = await clientMain(["plan", "--client", "cursor", "--json"], { HOME: home }, moduleUrl);
-      const version = await packageVersion();
       assert.equal(rendered.exitCode, 0);
       assert.deepEqual(parseLine(rendered.text), {
         kind: "plan",
-        launcher: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+        launcher: expectedLauncher(home),
         skill: { dest: join(home, ".agents", "skills", "poddrill"), action: "install" },
         effects: [
           {
@@ -53,19 +77,22 @@ describe("poddrill client", () => {
         mcpPath,
         `${JSON.stringify({ mcpServers: { other: { command: "echo", args: ["hi"] } } }, null, 2)}\n`,
       );
-      const version = await packageVersion();
       const rendered = await clientMain(["apply", "--yes", "--client", "cursor"], { HOME: home }, moduleUrl);
       assert.equal(rendered.exitCode, 0);
       assert.deepEqual(parseLine(rendered.text), {
         kind: "applied",
-        launcher: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+        launcher: expectedLauncher(home),
         skill: "install",
         results: [{ client: "cursor", path: mcpPath, result: "written" }],
       });
       assert.deepEqual(JSON.parse(await readFile(mcpPath, "utf8")), {
         mcpServers: {
           other: { command: "echo", args: ["hi"] },
-          poddrill: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+          poddrill: {
+            command: process.execPath,
+            args: [join(repoRoot, "dist", "cli.js"), "mcp"],
+            env: expectedLauncher(home).env,
+          },
         },
       });
       assert.equal(
@@ -80,7 +107,6 @@ describe("poddrill client", () => {
   it("a second apply reports unchanged and does not rewrite a matching file", async () => {
     const home = await tempHome();
     try {
-      const version = await packageVersion();
       const first = await clientMain(["apply", "--yes", "--client", "cursor"], { HOME: home }, moduleUrl);
       assert.equal(first.exitCode, 0);
       assert.equal(parseLine(first.text).results[0].result, "written");
@@ -92,7 +118,7 @@ describe("poddrill client", () => {
       assert.equal(second.exitCode, 0);
       assert.deepEqual(parseLine(second.text), {
         kind: "applied",
-        launcher: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+        launcher: expectedLauncher(home),
         skill: "keep",
         results: [{ client: "cursor", path: mcpPath, result: "unchanged" }],
       });
@@ -126,17 +152,16 @@ describe("poddrill client", () => {
   it("grok_bot apply copies the skill and writes no config file", async () => {
     const home = await tempHome();
     try {
-      const version = await packageVersion();
       const rendered = await clientMain(["apply", "--yes", "--client", "grok_bot"], { HOME: home }, moduleUrl);
       assert.equal(rendered.exitCode, 0);
       assert.deepEqual(parseLine(rendered.text), {
         kind: "applied",
-        launcher: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+        launcher: expectedLauncher(home),
         skill: "install",
         results: [
           {
             client: "grok_bot",
-            sentence: `Add a custom server named poddrill on this computer, running npx -y poddrill@${version} mcp.`,
+            sentence: grokSentence(home),
           },
         ],
       });
@@ -196,22 +221,49 @@ describe("poddrill client", () => {
         PODDRILL_SPAWN_LOG: logPath,
         PODDRILL_EMBED_WEIGHTS: weights,
       }, moduleUrl);
-      const version = await packageVersion();
       const needle = await cactusNeedle();
       assert.equal(rendered.exitCode, 1);
       assert.deepEqual(parseLine(rendered.text), {
         kind: "doctor",
         client: "cursor",
-        launcher: { command: "npx", args: ["-y", `poddrill@${version}`, "mcp"] },
+        launcher: expectedLauncher(home, { path: bin, weights }),
         checks: [
           { name: "skill-bundle", state: "ok" },
+          { name: "node", state: "ok", version: process.version },
           { name: "ffmpeg", state: "ok" },
           { name: "cactus-needle", state: "ok", version: needle },
-          { name: "ecapa", state: "bad", path: weights },
-          { name: "link", client: "cursor", record: { status: "absent" } },
+          { name: "numpy", state: "ok", version: NUMPY_PIN },
+          { name: "onnxruntime", state: "ok", version: ONNXRUNTIME_PIN },
+          {
+            name: "ecapa",
+            state: "bad",
+            path: weights,
+            detail: "ECAPA weights are missing",
+            fix: "poddrill fetch-weights",
+          },
+          {
+            name: "workspace",
+            state: "pending",
+            path: join(home, "poddrill"),
+            detail: "No poddrill workspace yet.",
+            fix: "poddrill setup --provider localhost --queue-length 4",
+          },
+          {
+            name: "yt-dlp",
+            state: "optional",
+            detail:
+              "yt-dlp is optional. Install the current release into the PodDrill Python, or use a standalone yt-dlp binary.",
+            fix: "python3 -m pip install --upgrade yt-dlp",
+          },
+          {
+            name: "link",
+            client: "cursor",
+            record: { status: "absent" },
+            fix: "poddrill client plan --client cursor --json && poddrill client apply --yes --client cursor",
+          },
         ],
       });
-      assert.equal(await readFile(logPath, "utf8"), "ffmpeg\npython3\n");
+      assert.equal(await readFile(logPath, "utf8"), "ffmpeg\npython3\npython3\npython3\npython3\n");
       await assert.rejects(stat(weights));
       await assert.rejects(stat(join(home, ".agents", "skills", "poddrill")));
       await assert.rejects(stat(join(home, ".cursor", "mcp.json")));
@@ -237,7 +289,6 @@ describe("poddrill client", () => {
         "",
       ].join("\n");
       await writeFile(configPath, original);
-      const version = await packageVersion();
       const planned = await clientMain(["plan", "--client", "grok_build"], { HOME: home }, moduleUrl);
       assert.equal(planned.exitCode, 0);
       assert.equal(await readFile(configPath, "utf8"), original);
@@ -252,7 +303,8 @@ describe("poddrill client", () => {
       assert.equal(updated.includes("[other]"), true);
       assert.equal(updated.includes("name = \"kept\""), true);
       assert.equal(updated.includes("startup_timeout_sec = 30"), true);
-      assert.equal(updated.includes(`poddrill@${version}`), true);
+      assert.equal(updated.includes("dist/cli.js"), true);
+      assert.equal(updated.includes("PODDRILL_PYTHON"), true);
       assert.equal(updated.includes("startup_timeout_sec = 5"), false);
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -272,18 +324,6 @@ function parseLine(text: string): Record<string, unknown> {
     record[key] = value;
   }
   return record;
-}
-
-async function packageVersion(): Promise<string> {
-  const parsed: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("package.json is not an object");
-  }
-  const version = Object.entries(parsed).find(([key]) => key === "version")?.[1];
-  if (typeof version !== "string") {
-    throw new Error("package.json has no version");
-  }
-  return version;
 }
 
 async function cactusNeedle(): Promise<string> {
@@ -341,8 +381,24 @@ async function writeShim(bin: string, logPath: string, needleVersion: string): P
     "  exit 0",
     "fi",
     "if [ \"$name\" = \"python3\" ]; then",
-    `  printf '%s\\n' '${needleVersion}'`,
-    "  exit 0",
+    "  case \"$*\" in",
+    "    *\"import needle\"*)",
+    `      printf '%s\\n' '${needleVersion}'`,
+    "      exit 0",
+    "      ;;",
+    "    *\"import numpy\"*)",
+    `      printf '%s\\n' '${NUMPY_PIN}'`,
+    "      exit 0",
+    "      ;;",
+    "    *\"import onnxruntime\"*)",
+    `      printf '%s\\n' '${ONNXRUNTIME_PIN}'`,
+    "      exit 0",
+    "      ;;",
+    "    *yt_dlp*)",
+    "      exit 1",
+    "      ;;",
+    "  esac",
+    "  exit 99",
     "fi",
     "exit 99",
     "",
@@ -356,7 +412,7 @@ function run(root: string, args: readonly string[]): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--experimental-strip-types", cliPath, ...args], {
       cwd: repoRoot,
-      env: { ...process.env, PODDRILL_WORKSPACE: root },
+      env: { ...process.env, PODDRILL_WORKSPACE: root, NODE_NO_WARNINGS: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const out: Buffer[] = [];

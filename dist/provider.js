@@ -1,6 +1,7 @@
 /**
  * Hosts that run a transcript model. The episode module never imports this file.
- * A new host is a new id in `providerIds` and a `WhistleHost` factory.
+ * A new host is a new id in `providerIds` and a `providerTransport` case.
+ * An `"unwired"` transport is refused by setup and by `openWhistleCall`.
  */
 import { openFleet } from "./fleet.js";
 import { fleetSize, modelForLanguage } from "./models.js";
@@ -26,23 +27,37 @@ export function transcriptRefusal(model, weights) {
         }
     }
 }
-/**
- * Mac runs one warm pool per model id. Nothing spawns until that id's first slice.
- * Grok Bot's computer and Cursor's cloud computer are not wired yet.
- */
-const factories = {
-    localhost: (config, whistleSpawn, moonshineSpawn) => openMacHost(config, whistleSpawn, moonshineSpawn),
-    "grok-bot": () => unwiredHost("grok-bot"),
-    "cursor-cloud": () => unwiredHost("cursor-cloud"),
-};
+/** `localhost`, `grok-bot`, and `cursor-cloud` all run the local Python host. */
+export function providerTransport(id) {
+    switch (id) {
+        case "localhost":
+        case "grok-bot":
+        case "cursor-cloud":
+            return "local";
+        default: {
+            const leftover = id;
+            throw new Error(`unexpected provider ${JSON.stringify(leftover)}`);
+        }
+    }
+}
+export function unwiredProviderMessage(id) {
+    return `${id} provider transport is not wired. poddrill setup refuses a provider that cannot transcribe.`;
+}
+/** Setup and `openWhistleCall` both call this before a worker can start. */
+export function refuseUnwiredTransport(id, transport) {
+    if (transport === "unwired") {
+        throw new Error(unwiredProviderMessage(id));
+    }
+}
 /** Open the host selected at setup. Spawns nothing until the first slice of a model. */
 export function openWhistleCall(providerId, config, whistleSpawn = spawnNeedleWorker, moonshineSpawn = spawnMoonshineWorker) {
+    refuseUnwiredTransport(providerId, providerTransport(providerId));
     if (!Number.isInteger(config.fleetLimit) || config.fleetLimit < 1) {
         throw new Error(`fleet limit must be a positive integer, got ${config.fleetLimit}`);
     }
-    return factories[providerId](config, whistleSpawn, moonshineSpawn);
+    return openLocalHost(config, whistleSpawn, moonshineSpawn);
 }
-function openMacHost(config, whistleSpawn, moonshineSpawn) {
+function openLocalHost(config, whistleSpawn, moonshineSpawn) {
     const pools = new Map();
     const poolFor = (model) => {
         const existing = pools.get(model.id);
@@ -109,15 +124,4 @@ function spawnFor(model, weights, whistleSpawn, moonshineSpawn) {
             throw new Error(`unexpected model ${JSON.stringify(leftover)}`);
         }
     }
-}
-function unwiredHost(providerId) {
-    return {
-        async transcribeSlice() {
-            throw new Error(`${providerId} provider transport is not wired`);
-        },
-        async close() { },
-        release() {
-            return true;
-        },
-    };
 }

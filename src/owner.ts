@@ -11,6 +11,7 @@ import { embedWeightsPath, openEmbedHost, type EmbedHost } from "./embed.ts";
 import { readPackageIdentity } from "./package-identity.ts";
 import { JobQueue } from "./jobs.ts";
 import { openWhistleCall, type WhistleHost } from "./provider.ts";
+import { resolvePython } from "./python-env.ts";
 import { readConfig, type WorkspaceRoot } from "./workspace.ts";
 
 type OwnerRequest =
@@ -31,7 +32,8 @@ type OwnerRequest =
   | { readonly op: "setSummary"; readonly episodeId: string; readonly summaryId: string; readonly summary: unknown }
   | { readonly op: "putParagraph"; readonly episodeId: string; readonly summaryId: string; readonly body: unknown }
   | { readonly op: "postParagraph"; readonly episodeId: string; readonly summaryId: string; readonly body: unknown }
-  | { readonly op: "summary"; readonly episodeId: string; readonly summaryId: string };
+  | { readonly op: "summary"; readonly episodeId: string; readonly summaryId: string }
+  | { readonly op: "stop" };
 
 /** Two pools that never share a process. The owner creates and closes both. */
 interface OwnerHosts {
@@ -86,6 +88,7 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
   const sock = socketPath(root);
   const waiting: Socket[] = [];
   let queue: JobQueue | undefined;
+  let requestStop = (): void => {};
   // allowHalfOpen so a client FIN cannot drop the reply while start is still reading audio.
   const server = createServer({ allowHalfOpen: true }, (connection) => {
     const opened = queue;
@@ -95,7 +98,7 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
       waiting.push(connection);
       return;
     }
-    accept(connection, opened, root);
+    accept(connection, opened, root, requestStop);
   });
   let claimed = false;
   try {
@@ -109,6 +112,8 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
     return;
   }
   const config = await readConfig(root);
+  const python = await resolvePython(process.env, config.python);
+  process.env["PODDRILL_PYTHON"] = python;
   const hosts: OwnerHosts = {
     whistle: openWhistleCall(config.provider, {
       fleetLimit: config.fleetLimit,
@@ -144,20 +149,18 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
       watcher.stop();
     }
   };
+  const gate = bindStop(server, sock, opened, hosts, stopIdle);
+  requestStop = gate.stop;
   for (const connection of waiting.splice(0, waiting.length)) {
-    accept(connection, opened, root);
+    accept(connection, opened, root, requestStop);
   }
   const version = mcpOnStdio ? (await readPackageIdentity(import.meta.url)).version : undefined;
-  await shutdownOnSignal(
-    server,
-    sock,
-    opened,
-    hosts,
-    stopIdle,
-    version === undefined
-      ? undefined
-      : speakMcp(version, async (name, args) => callTool(opened, root, name, args)),
-  );
+  if (version !== undefined) {
+    void speakMcp(version, async (name, args) => callTool(opened, root, name, args)).then(() => {
+      gate.stop();
+    });
+  }
+  await gate.done;
 }
 
 export async function proxyMcp(root: string): Promise<void> {
@@ -197,7 +200,7 @@ export async function proxyMcp(root: string): Promise<void> {
   });
 }
 
-function accept(socket: Socket, queue: JobQueue, root: WorkspaceRoot): void {
+function accept(socket: Socket, queue: JobQueue, root: WorkspaceRoot, requestStop: () => void): void {
   let buffer = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk: string) => {
@@ -210,7 +213,11 @@ function accept(socket: Socket, queue: JobQueue, root: WorkspaceRoot): void {
     buffer = "";
     void handleLine(line, queue, root)
       .then((response) => {
-        socket.end(response);
+        socket.end(response.text, () => {
+          if (response.stop) {
+            requestStop();
+          }
+        });
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -220,50 +227,69 @@ function accept(socket: Socket, queue: JobQueue, root: WorkspaceRoot): void {
   socket.resume();
 }
 
-async function handleLine(line: string, queue: JobQueue, root: WorkspaceRoot): Promise<string> {
+interface LineResult {
+  readonly text: string;
+  readonly stop: boolean;
+}
+
+function answered(text: string, stop = false): LineResult {
+  return { text, stop };
+}
+
+async function handleLine(line: string, queue: JobQueue, root: WorkspaceRoot): Promise<LineResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return render({ kind: "error", message: "malformed request" });
+    return answered(render({ kind: "error", message: "malformed request" }));
   }
   const request = parseRequest(parsed);
   if (request === undefined) {
-    return render({ kind: "error", message: "unknown request" });
+    return answered(render({ kind: "error", message: "unknown request" }));
   }
   switch (request.op) {
     case "ping":
-      return "{\"op\":\"pong\"}\n";
+      return answered("{\"op\":\"pong\"}\n");
+    case "stop":
+      return answered(render({ kind: "ready", state: "stopped" }), true);
     case "audit":
-      return render(await readAudit(root, request.episodeId));
+      return answered(render(await readAudit(root, request.episodeId)));
     case "start":
-      return finish(root, request, () => queue.start(request.audioPath, request.language ?? "en"));
+      return answered(await finish(root, request, () => queue.start(request.audioPath, request.language ?? "en")));
     case "episode":
-      return finish(root, request, () => queue.episode(request.episodeId));
+      return answered(await finish(root, request, () => queue.episode(request.episodeId)));
     case "cues":
-      return finish(root, request, () =>
-        queue.cues(request.episodeId, {
-          ...(request.limit === undefined ? {} : { limit: request.limit }),
-          ...(request.after === undefined ? {} : { after: request.after }),
-          ...(request.groupId === undefined ? {} : { groupId: request.groupId }),
-          ...(request.hosts === undefined ? {} : { hosts: request.hosts }),
-        }),
+      return answered(
+        await finish(root, request, () =>
+          queue.cues(request.episodeId, {
+            ...(request.limit === undefined ? {} : { limit: request.limit }),
+            ...(request.after === undefined ? {} : { after: request.after }),
+            ...(request.groupId === undefined ? {} : { groupId: request.groupId }),
+            ...(request.hosts === undefined ? {} : { hosts: request.hosts }),
+          }),
+        ),
       );
     case "labelGroups":
-      return finish(root, request, () => queue.labelGroups(request.episodeId, request.groups));
+      return answered(await finish(root, request, () => queue.labelGroups(request.episodeId, request.groups)));
     case "startSummary":
-      return finish(root, request, () => queue.startSummary(request.episodeId));
+      return answered(await finish(root, request, () => queue.startSummary(request.episodeId)));
     case "setSummary":
-      return finish(root, request, () => queue.setSummary(request.episodeId, request.summaryId, request.summary));
+      return answered(
+        await finish(root, request, () => queue.setSummary(request.episodeId, request.summaryId, request.summary)),
+      );
     case "putParagraph":
-      return finish(root, request, () => queue.putParagraph(request.episodeId, request.summaryId, request.body));
+      return answered(
+        await finish(root, request, () => queue.putParagraph(request.episodeId, request.summaryId, request.body)),
+      );
     case "postParagraph":
-      return finish(root, request, () => queue.postParagraph(request.episodeId, request.summaryId, request.body));
+      return answered(
+        await finish(root, request, () => queue.postParagraph(request.episodeId, request.summaryId, request.body)),
+      );
     case "summary":
-      return finish(root, request, () => queue.summary(request.episodeId, request.summaryId));
+      return answered(await finish(root, request, () => queue.summary(request.episodeId, request.summaryId)));
     default: {
       const leftover: never = request;
-      return render({ kind: "error", message: `unexpected ${JSON.stringify(leftover)}` });
+      return answered(render({ kind: "error", message: `unexpected ${JSON.stringify(leftover)}` }));
     }
   }
 }
@@ -297,6 +323,7 @@ function auditEpisodeId(request: OwnerRequest, response: object): string | undef
   switch (request.op) {
     case "ping":
     case "audit":
+    case "stop":
       return undefined;
     case "start":
       return startedEpisodeId(response);
@@ -405,6 +432,9 @@ function parseRequest(value: unknown): OwnerRequest | undefined {
   const op = record["op"];
   if (op === "ping") {
     return { op: "ping" };
+  }
+  if (op === "stop") {
+    return { op: "stop" };
   }
   if (op === "start" && typeof record["audioPath"] === "string") {
     const language = record["language"];
@@ -546,31 +576,30 @@ function listen(server: ReturnType<typeof createServer>, sock: string): Promise<
   });
 }
 
-function shutdownOnSignal(
+function bindStop(
   server: ReturnType<typeof createServer>,
   sock: string,
   queue: JobQueue,
   hosts: OwnerHosts,
   stopIdle: () => void,
-  mcp: Promise<void> | undefined,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let stopping = false;
-    const stop = (): void => {
-      if (stopping) {
-        return;
-      }
-      stopping = true;
-      void closeOwner(server, sock, queue, hosts, stopIdle).then(() => {
-        resolve();
-      });
-    };
-    process.on("SIGTERM", stop);
-    process.on("SIGINT", stop);
-    if (mcp !== undefined) {
-      void mcp.then(stop);
-    }
+): { readonly done: Promise<void>; readonly stop: () => void } {
+  let stopping = false;
+  let resolveDone = (): void => {};
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
   });
+  const stop = (): void => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    void closeOwner(server, sock, queue, hosts, stopIdle).then(() => {
+      resolveDone();
+    });
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  return { done, stop };
 }
 
 /** Stop the idle watchers, then the queue, so no lane takes new work. Then the hosts, so worker pipes close before exit. */

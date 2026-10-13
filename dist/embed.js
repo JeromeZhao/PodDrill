@@ -1,14 +1,14 @@
 /**
- * The local ECAPA embedding host. One python3 process per fleet slot, never shared with Whistle.
+ * The local ECAPA embedding host. One Python process per fleet slot, never shared with Whistle.
  * Ready frame: { "kind": "ready" }. Result: 192 numbers for one stretch wav.
  * Frontend: float samples times 32768, Kaldi fbank with 80 bins, hamming, 25 ms window, 10 ms shift,
  * dither 0, then CMN, then the ONNX session on CPU.
  */
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { pathExists } from "./disk.js";
 import { openFleet } from "./fleet.js";
+import { homeFromEnv } from "./python-env.js";
 import { PYTHON_FRAMES, spawnFramedWorker } from "./worker.js";
+import { digestStatus, ECAPA_FILE, ecapaSpec, FETCH_WEIGHTS_FIX } from "./weights.js";
 export const EMBEDDING_SIZE = 192;
 /** `PODDRILL_EMBED_WEIGHTS`, else `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. */
 export function embedWeightsPath(env) {
@@ -16,7 +16,7 @@ export function embedWeightsPath(env) {
     if (configured !== undefined && configured !== "") {
         return configured;
     }
-    return join(homedir(), ".cache", "poddrill", "ecapa", "voxceleb_ECAPA512.onnx");
+    return join(homeFromEnv(env), ".cache", "poddrill", "ecapa", ECAPA_FILE);
 }
 /** Spawns nothing until the first stretch. A missing weights file fails each call without spawning. */
 export function openEmbedHost(embeddingLimit, weightsPath) {
@@ -29,9 +29,14 @@ export function openEmbedHost(embeddingLimit, weightsPath) {
         closedMessage: "embedding host is closed",
     });
     const requireWeights = async () => {
-        if (!(await pathExists(weightsPath))) {
-            throw new Error(`ECAPA weights are missing at ${weightsPath}. Put the file there or set PODDRILL_EMBED_WEIGHTS.`);
+        const status = await digestStatus(weightsPath, ecapaSpec);
+        if (status === "match") {
+            return;
         }
+        if (status === "missing") {
+            throw new Error(`ECAPA weights are missing at ${weightsPath}. Run ${FETCH_WEIGHTS_FIX} or set PODDRILL_EMBED_WEIGHTS.`);
+        }
+        throw new Error(`ECAPA weights at ${weightsPath} do not match the pinned file. Run ${FETCH_WEIGHTS_FIX}.`);
     };
     return {
         prepare: requireWeights,

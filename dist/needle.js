@@ -1,10 +1,11 @@
 /**
- * The local Mac Whistle worker: one python3 process that imports cactus-needle once.
+ * The local Whistle worker: one Python process that imports cactus-needle once.
  * Its ready frame is { "kind": "ready", "version": string }, checked against package.json.
  * Result: <needle.transcribe output>, parsed as `WhistleResult`.
  */
 import { parseWhistle } from "./episode.js";
 import { readPackageIdentity } from "./package-identity.js";
+import { INSTALL_PYTHON_FIX } from "./python-env.js";
 import { PYTHON_FRAMES, spawnFramedWorker } from "./worker.js";
 /** Start one warm cactus-needle process. */
 export const spawnNeedleWorker = (events) => {
@@ -14,6 +15,12 @@ export const spawnNeedleWorker = (events) => {
     return spawnFramedWorker({
         label: "cactus-needle",
         args: ["-c", WORKER_SCRIPT],
+        explainExit(tail) {
+            if (tail.includes("No module named 'needle'") || tail.includes("No module named \"needle\"")) {
+                return `cactus-needle is not installed. Run ${INSTALL_PYTHON_FIX}.`;
+            }
+            return tail;
+        },
         async checkReady(ready) {
             const version = ready["version"];
             if (typeof version !== "string") {

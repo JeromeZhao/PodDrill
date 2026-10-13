@@ -16,14 +16,14 @@ The script refuses a destination inside the git tree that contains the script. P
 
 ## yt-dlp
 
-If the feed has no audio URL, or the script does not get the file, install the current yt-dlp and run that module. The printed line is the download path.
+If the feed has no audio URL, or the script does not get the file, install the current yt-dlp into the PodDrill Python and run that module. The version is unpinned. On a PEP 668 Python, install into the venv from `poddrill install-python`, or set `PODDRILL_PYTHON` to an interpreter that allows pip. A pipx install or a standalone yt-dlp binary also works. The printed line is the download path.
 
 ```
-python3 -m pip install --upgrade yt-dlp
-python3 -m yt_dlp -x --no-playlist --print after_move:filepath -o "<directory>/download.%(ext)s" "<page-url>"
+"$PODDRILL_PYTHON" -m pip install --upgrade yt-dlp
+"$PODDRILL_PYTHON" -m yt_dlp -x --no-playlist --print after_move:filepath -o "<directory>/download.%(ext)s" "<page-url>"
 ```
 
-Write `<directory>` outside this git repository. If that command does not get the audio, read [Usage and options](https://github.com/yt-dlp/yt-dlp#usage-and-options).
+`poddrill client doctor` reports yt-dlp as optional and prints that pip command when it is missing. Write `<directory>` outside this git repository. If that command does not get the audio, read [Usage and options](https://github.com/yt-dlp/yt-dlp#usage-and-options).
 
 ## Other audio
 

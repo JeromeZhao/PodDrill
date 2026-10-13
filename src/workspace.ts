@@ -5,12 +5,12 @@
 
 import { randomBytes } from "node:crypto";
 import { mkdir, realpath, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { asRecord, errorCode, pathExists, readJsonFile } from "./disk.ts";
 import { isModelId, modelIds, type ModelFleet, type ModelId, type ModelWeights } from "./models.ts";
-import { isProviderId, providerIds, type ProviderId } from "./provider.ts";
+import { homeFromEnv } from "./python-env.ts";
+import { isProviderId, providerIds, refuseUnwiredTransport, providerTransport, type ProviderId } from "./provider.ts";
 
 /** Absolute, symlink-resolved workspace directory. Built only by `resolveWorkspace` and `setupWorkspace`. */
 export type WorkspaceRoot = string & { readonly __brand: "WorkspaceRoot" };
@@ -40,6 +40,8 @@ export interface WorkspaceConfig {
   readonly modelFleet: ModelFleet;
   /** Absolute weight paths. Empty when the file omits the object. The path does not have to exist. */
   readonly modelWeights: ModelWeights;
+  /** Absolute interpreter path recorded by setup. Absent on older files. */
+  readonly python?: string;
   /**
    * Most embedding processes the running embedding may use, and most stretches it keeps in flight.
    * Integer, at least 1. A file written without the field reads as 1.
@@ -108,14 +110,20 @@ const ARTIFACT_OUTPUTS: Readonly<Record<ArtifactKind, string>> = {
   embedding: "embedding.json",
 };
 
+/** `PODDRILL_WORKSPACE`, else `~/poddrill`. Setup and every other command use this path. */
+export function defaultWorkspacePath(env: Readonly<Record<string, string | undefined>>): string {
+  const configured = env["PODDRILL_WORKSPACE"];
+  if (configured !== undefined && configured !== "") {
+    return resolve(configured);
+  }
+  return resolve(join(homeFromEnv(env), "poddrill"));
+}
+
 /** `PODDRILL_WORKSPACE`, else `~/poddrill`, resolved with realpath. */
 export async function resolveWorkspace(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<WorkspaceRoot> {
-  const configured = env["PODDRILL_WORKSPACE"];
-  const candidate = resolve(
-    configured === undefined || configured === "" ? join(homedir(), "poddrill") : configured,
-  );
+  const candidate = defaultWorkspacePath(env);
   let root: WorkspaceRoot;
   try {
     root = asWorkspaceRoot(await realpath(candidate));
@@ -161,11 +169,14 @@ export async function setupWorkspace(input: {
   readonly modelWeights?: ModelWeights;
   /** Omitted keeps the on-disk value, or 1 when the file has none or does not parse. */
   readonly embeddingLimit?: number;
+  /** Omitted keeps the on-disk path. Present replaces it. Absolute. */
+  readonly python?: string;
   readonly ownerAlive: boolean;
 }): Promise<SetupResult> {
   if (!isProviderId(input.provider)) {
     throw new Error(`unknown provider ${input.provider}. Use one of ${providerIds.join(", ")}.`);
   }
+  refuseUnwiredTransport(input.provider, providerTransport(input.provider));
   if (!isCount(input.queueLength)) {
     throw new Error(`queue length must be a positive integer, got ${input.queueLength}`);
   }
@@ -175,12 +186,16 @@ export async function setupWorkspace(input: {
   if (input.embeddingLimit !== undefined && !isCount(input.embeddingLimit)) {
     throw new Error(`embedding limit must be a positive integer, got ${input.embeddingLimit}`);
   }
+  if (input.python !== undefined && !isAbsolute(input.python)) {
+    throw new Error(`python must be an absolute path, got ${input.python}`);
+  }
   const requested = resolve(input.root);
   const current = parseConfig(await readJsonFile(join(requested, CONFIG_FILE)));
   const modelFleet = input.modelFleet ?? current?.modelFleet ?? {};
   const modelWeights = input.modelWeights ?? current?.modelWeights ?? {};
   assertModelFleet(modelFleet);
   assertModelWeights(modelWeights);
+  const python = pythonPath(input.python, current?.python);
   const config: WorkspaceConfig = {
     provider: input.provider,
     queueLength: input.queueLength,
@@ -188,6 +203,7 @@ export async function setupWorkspace(input: {
     modelFleet,
     modelWeights,
     embeddingLimit: input.embeddingLimit ?? current?.embeddingLimit ?? 1,
+    ...(python === undefined ? {} : { python }),
   };
   const unchanged = current !== undefined && sameConfig(current, config);
 
@@ -200,7 +216,7 @@ export async function setupWorkspace(input: {
         `poddrill serve is running with provider ${current.provider},`,
         `queue length ${current.queueLength}, fleet limit ${current.fleetLimit},`,
         `and embedding limit ${current.embeddingLimit}.`,
-        "Stop it before changing the setup.",
+        "Stop it with poddrill stop before changing the setup.",
       ].join(" "),
     };
   }
@@ -301,6 +317,7 @@ function parseConfig(value: unknown): WorkspaceConfig | undefined {
   }
   const fleetLimit = readFleetLimit(record);
   const embeddingLimit = optionalCount(record["embeddingLimit"]);
+  const python = readPython(record);
   if (fleetLimit === undefined || embeddingLimit === undefined) {
     return undefined;
   }
@@ -311,7 +328,19 @@ function parseConfig(value: unknown): WorkspaceConfig | undefined {
     modelFleet: readModelFleet(record["modelFleet"]),
     modelWeights: readModelWeights(record["modelWeights"]),
     embeddingLimit,
+    ...(python === undefined ? {} : { python }),
   };
+}
+
+function readPython(record: Record<string, unknown>): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, "python")) {
+    return undefined;
+  }
+  const python = record["python"];
+  if (typeof python !== "string" || !isAbsolute(python)) {
+    throw new Error(`python must be an absolute path, got ${String(python)}`);
+  }
+  return python;
 }
 
 /**
@@ -401,7 +430,14 @@ function writtenConfig(config: WorkspaceConfig): string {
     body["modelWeights"] = config.modelWeights;
   }
   body["embeddingLimit"] = config.embeddingLimit;
+  if (config.python !== undefined) {
+    body["python"] = config.python;
+  }
   return `${JSON.stringify(body, null, 2)}\n`;
+}
+
+function pythonPath(requested: string | undefined, current: string | undefined): string | undefined {
+  return requested ?? current;
 }
 
 /** Absent reads as 1. Present and not a positive integer is `undefined`. */
@@ -418,6 +454,7 @@ function sameConfig(a: WorkspaceConfig, b: WorkspaceConfig): boolean {
     a.queueLength === b.queueLength &&
     a.fleetLimit === b.fleetLimit &&
     a.embeddingLimit === b.embeddingLimit &&
+    a.python === b.python &&
     sameById(a.modelFleet, b.modelFleet) &&
     sameById(a.modelWeights, b.modelWeights)
   );

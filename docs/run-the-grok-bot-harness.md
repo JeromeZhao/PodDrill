@@ -1,5 +1,7 @@
 # Run the Grok Bot harness
 
+This document is a developer check. Installing PodDrill does not use it.
+
 You run one command. The command creates one throwaway bot, asks that bot to use poddrill, and scores the files in a temp workspace. Stdout is one JSON report. The report does not include bot chat text.
 
 ## Before you start

@@ -2,26 +2,48 @@
 name: poddrill
 description: >-
   Transcribe a podcast episode into timed text, group the voices, and store
-  a summary whose paragraphs cite that text. The agent reads the text, names
-  the voices, and writes the summary words. PodDrill stores the episode.
-  Use when the user says to set up PodDrill on this computer, when fetching
-  episode audio, starting a transcript, labeling speakers, or writing a summary.
-  When a session has no PodDrill tools, install the requirements, register the
-  client, and set up the workspace before transcribing. Do not use it to change
-  the poddrill TypeScript.
+  a summary whose paragraphs cite that text. Use when the user says to set up
+  PodDrill, fetch episode audio, start a transcript, label speakers, or write
+  a summary. Do not use it to change the poddrill TypeScript.
 ---
 
 # PodDrill
 
-PodDrill is a toolset to make transcription and summary of podcast audio streamlined and structured. You may also use it for any other audio. It maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You decide how to use the toolset to answer user's request of audio summary.
+PodDrill maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You decide how to use the toolset to answer the user's request. You read the text, name the voices, and write the summary words. PodDrill stores the episode.
 
-Find the package, install the requirements, register the client, and set up the workspace once. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it. Do not reprocess the audio again.
+Install once, with the sequence below. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it.
 
-## Find the package
+## Install on this computer
 
-The npm package is `poddrill`. Before it is on disk, read the published `version` and use `npx -y poddrill@<version>`. After it is installed, `<version>` is the `version` field in that package's `package.json`. Do not use `@latest`.
+Do this once on the computer that will transcribe. Each step is safe to repeat. `localhost`, `grok-bot`, and `cursor-cloud` all run the local Python host on this computer. The provider id names that computer.
 
-Install Node.js 22.18 or newer, `ffmpeg` on `PATH`, and the Python package `cactus-needle` 3.2.0. The npm package named cactus-needle is a different package. Place the ECAPA file at `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`, or set `PODDRILL_EMBED_WEIGHTS` to another path. This package does not install those, and it has no download URL for the ECAPA file.
+1. Install Node.js 20.19 or newer and `ffmpeg`. Use the Node `.tar.gz` archive from `https://nodejs.org/dist/v20.19.0/`, or run `npx -y node@20.19.0`. On macOS, `brew install ffmpeg`. On Linux, `sudo apt-get install -y ffmpeg`.
+
+2. Install the npm package. Read the published `version` and run `npm install -g poddrill@<version>`. Do not use `@latest`. Cloning the git repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`.
+
+3. Run `poddrill install-python`. This creates `~/.cache/poddrill/venv` and installs cactus-needle 3.2.0, numpy 2.5.4, and onnxruntime 1.31.0. It uses `uv` when `uv` is on PATH, and otherwise `python3 -m venv`. The npm package named cactus-needle is a different package.
+
+4. Run `poddrill fetch-weights`. This downloads `voxceleb_ECAPA512.onnx` from the pinned WeSpeaker commit, checks the byte size and SHA-256, and writes `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. A later run leaves a matching file in place.
+
+5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. `yt-dlp` is optional and does not fail the command. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
+
+6. Run `poddrill setup --provider localhost --queue-length 4`. Without `PODDRILL_WORKSPACE`, setup and every other command use `~/poddrill`. For `ja`, `ko`, or `zh`, read the weights guide and pass `--model-weights` on that same command. `en`, `de`, `fr`, `es`, `it`, `nl`, and `pl` do not need Moonshine weights.
+
+   `poddrill bootstrap --provider localhost --queue-length 4` runs steps 3, 4, and 6.
+
+7. Register the client. Run `poddrill client plan --client cursor --json`. After that plan is approved, run `poddrill client apply --yes --client cursor`. Grok Bot prints a sentence with the absolute Node binary, `dist/cli.js`, and an env block (`PATH`, `PODDRILL_PYTHON`, `PODDRILL_WORKSPACE`, `PODDRILL_EMBED_WEIGHTS`). Add that custom server in the Grok Bot chat. It does not write a config file.
+
+8. Run `poddrill client doctor --client cursor --json` again. Exit 0 means every required check is ok.
+
+A later refresh of clients that already have an entry is `poddrill client plan --linked --json`, then `poddrill client apply --yes --linked` after approval.
+
+## Python
+
+`PODDRILL_PYTHON` selects the interpreter. Pass `--python` or set `PODDRILL_PYTHON` on setup to store an absolute path in `poddrill.json`. Otherwise PodDrill uses `~/.cache/poddrill/venv/bin/python` when that file exists, then `python3`. Install yt-dlp and moonshine-voice into that same interpreter. The current yt-dlp and moonshine-voice releases are unpinned.
+
+## Stop
+
+`poddrill stop` stops the running owner. Setup rejects a change while the owner is running. Run `poddrill stop` before you change the provider, queue length, fleet limit, or embedding limit.
 
 ## Cues
 
@@ -37,39 +59,11 @@ A summary does not require those labels.
 
 ## Summaries
 
-Summary is an asset of an episode. An episode can have multiple summary asset. You use the cues when you write a summary. PodDrill stores paragraphs that cite cues, then an episode summary written from the paragraph text. You choose which cues to include and you write the words. You do not write the file yourself.
+Summary is an asset of an episode. An episode can have multiple summary assets. You use the cues when you write a summary. PodDrill stores paragraphs that cite cues, then an episode summary written from the paragraph text. You choose which cues to include and you write the words. You do not write the file yourself.
 
 ## The episode
 
 You keep the source list. The utility keeps the episode. The episode holds the transcript, the cues, the groups, the labels, and the summaries in your filesystem. Do not copy artifact state, progress, paths, or labels into the source list.
-
-## Register the client
-
-When this session has no PodDrill tools, register the client before setting up a workspace. `<version>` is the `version` field in this package's `package.json`. Do not use `@latest`.
-
-Run `npx -y poddrill@<version> client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client.
-
-Then run `npx -y poddrill@<version> client plan --client cursor --json`.
-
-After that plan is approved, run `npx -y poddrill@<version> client apply --yes --client cursor`.
-
-A later refresh of clients that already have an entry is `npx -y poddrill@<version> client plan --linked --json`, then `npx -y poddrill@<version> client apply --yes --linked` after approval. Grok Bot prints a sentence and does not write a config file. Add that custom server in the Grok Bot chat. It runs on the bot's computer.
-
-## Set up once
-
-Set `PODDRILL_WORKSPACE` to a directory outside the git tree that contains this skill. Without that variable, `setup` uses the current directory and every other command uses `~/poddrill`.
-
-Run setup once in that workspace. The provider is the computer you are running on.
-
-```
-poddrill setup --provider <id> --queue-length 4
-```
-
-If you are the Grok Bot agent, `<id>` is `grok-bot`. If you are the Cursor cloud agent, `<id>` is `cursor-cloud`. That computer is the host. Otherwise `<id>` is `localhost`.
-
-For `ja`, `ko`, or `zh`, read the weights guide and pass `--model-weights` on that same setup command. `en`, `de`, `fr`, `es`, `it`, `nl`, and `pl` do not need weights.
-
-Stop the owner before you change setup. A running owner rejects a different provider, queue length, fleet limit, or embedding limit.
 
 ## Start an episode
 
@@ -79,11 +73,13 @@ Pass `--language <code>` on `poddrill start` when the episode is not English. Th
 
 `poddrill start` returns before the transcript exists. Poll `poddrill episode <id>` until the transcript artifact `state` is `ready` or `failed`. The id is `ep_` plus the first 16 hex characters of the sha256 of the file bytes.
 
-The transcript is done when that `state` is `ready`. Exit 0 does not mean the transcript is done. If it is missing or `failed`, pass the same WAV to `poddrill start` again. The episode id does not change.
+The transcript is done when that `state` is `ready`. Exit 0 does not mean the transcript is done. If the transcript or the embedding is missing or `failed`, pass the same WAV to `poddrill start` again. The episode id does not change. `created` is false, and the failed artifact runs again.
 
 ## Read a result
 
 Parse the JSON line on stdout. `episode` exits 0 when the id is unknown. `not-ready` exits 0. `start` exits 1 when `kind` is `rejected` or `full`. MCP returns that same JSON. `isError` is true only when the text starts with `{"kind":"error"`.
+
+`poddrill --help` and `poddrill --version` print plain text and exit 0.
 
 ## Present the summary
 
