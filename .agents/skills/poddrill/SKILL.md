@@ -9,7 +9,7 @@ description: >-
 
 # PodDrill
 
-PodDrill maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You decide how to use the toolset to answer the user's request. You read the text, name the voices, and write the summary words. PodDrill stores the episode.
+PodDrill maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You name the voices and you write the summary words. PodDrill stores the episode. When the user wants that episode handled, follow the order below. Do not skip a step.
 
 Install once, with the sequence below. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it.
 
@@ -55,7 +55,9 @@ Read cues only after the embedding is ready. A ready transcript can still be not
 
 An asset clusters cues that sound like one voice. That cluster is a speaker group. You assign the group a name, `quote`, `ending`, or `undetermined`. The utility does not choose the name.
 
-Label the speaker groups before you write a summary. Read the speaker guide and run the label commands. Then read the summary guide and store the summary with the PodDrill commands. Do not write a summary from the transcript text alone.
+Label the speaker groups before you write a summary. Do not write a summary from the transcript text alone.
+
+The order is `poddrill start`, then poll `poddrill episode` until the transcript and the embedding are `ready`, then `poddrill cues` and `poddrill label-groups` from the speaker guide, then `poddrill start-summary`, `poddrill post-paragraph`, and `poddrill set-summary` from the summary guide. Present the text from `poddrill summary`. A summary written in chat before those commands is not the result.
 
 ## Summaries
 
@@ -83,7 +85,7 @@ Parse the JSON line on stdout. `episode` exits 0 when the id is unknown. `not-re
 
 ## Present the summary
 
-Present the summary in the format preferred or prescribed by users, but always grounded by the summary constructed via poddrill.
+Present the text returned by `poddrill summary`. Match the format the user asked for. Do not replace that text with a summary you wrote from the transcript.
 
 ## Guides
 
@@ -92,8 +94,8 @@ Each file tells you how to do one part of the task.
 - For a feed or a YouTube page, and for telling a new episode from one already handed to poddrill, read [references/track-sources.md](references/track-sources.md).
 - For finding the audio, downloading it, and writing the 16 kHz WAV, read [references/fetch-audio.md](references/fetch-audio.md).
 - For Japanese, Korean, or Chinese weights, read [references/select-models.md](references/select-models.md).
-- For a voice name, a quote, an ending, or cues left undetermined, read [references/assign-speakers.md](references/assign-speakers.md).
-- For an episode summary, read [references/create-summary.md](references/create-summary.md).
+- Before any summary, read [references/assign-speakers.md](references/assign-speakers.md) and label the groups.
+- After those labels, read [references/create-summary.md](references/create-summary.md) and store the summary with its commands.
 
 ## Finish
 

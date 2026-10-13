@@ -122,6 +122,13 @@ test("a summary follows speaker labels and the stored summary commands", async (
   );
   assert.equal(skill.includes("A summary does not require those labels."), false);
   assert.equal(skill.includes("Do not write a summary from the transcript text alone."), true);
+  const labelAt = skill.indexOf("poddrill label-groups");
+  const summaryAt = skill.indexOf("poddrill start-summary");
+  assert.equal(labelAt >= 0, true);
+  assert.equal(summaryAt > labelAt, true);
+  assert.equal(skill.includes("poddrill post-paragraph"), true);
+  assert.equal(skill.includes("poddrill set-summary"), true);
+  assert.equal(skill.includes("poddrill summary"), true);
   assert.equal(summary.includes("Do not write a summary from the transcript text."), true);
 });
 
