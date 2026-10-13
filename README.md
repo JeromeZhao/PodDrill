@@ -27,6 +27,12 @@ Without `PODDRILL_WORKSPACE`, every command uses `~/poddrill`. `poddrill stop` s
 
 Grok Bot cannot write its server entry. It prints the custom server to add: the absolute Node binary, `dist/cli.js`, and an env block. Add that server in the Grok Bot chat.
 
+## Tests
+
+`npm test` runs the unit tests. Those tests use `node --experimental-strip-types`.
+
+`npm run test:smoke` runs a clean-home install, downloads the ECAPA file, and transcribes a short generated clip through `dist/cli.js`. It needs `python3` with `ensurepip`, `ffmpeg`, and `espeak-ng`. If one of those is missing, the test skips and names the missing tool. This repository has no CI workflow. Run `npm run test:smoke` on a computer that has those tools. Build `dist/` with `npm run build` first.
+
 ## License
 
 MIT License. Copyright 2026 Jianyu Zhao.
