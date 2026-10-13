@@ -1,6 +1,6 @@
 # Create an episode summary
 
-Build one summary of an episode from its cues. One episode can hold many summaries. Each one is a YAML file. You do not write that file yourself. Use the commands below.
+Build one summary of an episode from its cues. Do this after the speaker groups are labeled. Do not write a summary from the transcript text. One episode can hold many summaries. Each one is a YAML file. You do not write that file yourself. Use the commands below.
 
 Read the cues first with `poddrill cues`. Page them as in [Speaker assignment](assign-speakers.md).
 

@@ -9,7 +9,7 @@ description: >-
 
 # PodDrill
 
-PodDrill maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You decide how to use the toolset to answer the user's request. You read the text, name the voices, and write the summary words. PodDrill stores the episode.
+PodDrill maps an episode (the audio) to cues, clusters those cues into speaker groups, and stores summaries. You name the voices and you write the summary words. PodDrill stores the episode. When the user wants that episode handled, follow the order below. Do not skip a step.
 
 Install once, with the sequence below. After that, read the one guide for the part you are doing. Leave the other guides unread. If an episode already has the asset you need, read it.
 
@@ -25,9 +25,9 @@ Do this once on the computer that will transcribe. Each step is safe to repeat. 
 
 4. Run `poddrill fetch-weights`. This downloads `voxceleb_ECAPA512.onnx` from the pinned WeSpeaker commit, checks the byte size and SHA-256, and writes `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. A later run leaves a matching file in place.
 
-5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. `yt-dlp` is optional and does not fail the command. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
+5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. Skip a check whose `state` is `optional`. Do not install it. Do not mention it. Do not ask the user about it. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
 
-6. Run `poddrill setup --provider localhost --queue-length 4`. Without `PODDRILL_WORKSPACE`, setup and every other command use `~/poddrill`. For `ja`, `ko`, or `zh`, read the weights guide and pass `--model-weights` on that same command. `en`, `de`, `fr`, `es`, `it`, `nl`, and `pl` do not need Moonshine weights.
+6. Run `poddrill setup --provider localhost --queue-length 4`. Without `PODDRILL_WORKSPACE`, setup and every other command use `~/poddrill`. When the episode language is `ja`, `ko`, or `zh`, read the weights guide before this command. Ask the user before you install anything that guide names.
 
    `poddrill bootstrap --provider localhost --queue-length 4` runs steps 3, 4, and 6.
 
@@ -39,7 +39,7 @@ A later refresh of clients that already have an entry is `poddrill client plan -
 
 ## Python
 
-`PODDRILL_PYTHON` selects the interpreter. Pass `--python` or set `PODDRILL_PYTHON` on setup to store an absolute path in `poddrill.json`. Otherwise PodDrill uses `~/.cache/poddrill/venv/bin/python` when that file exists, then `python3`. Install yt-dlp and moonshine-voice into that same interpreter. The current yt-dlp and moonshine-voice releases are unpinned.
+`PODDRILL_PYTHON` selects the interpreter. Pass `--python` or set `PODDRILL_PYTHON` on setup to store an absolute path in `poddrill.json`. Otherwise PodDrill uses `~/.cache/poddrill/venv/bin/python` when that file exists, then `python3`.
 
 ## Stop
 
@@ -55,7 +55,9 @@ Read cues only after the embedding is ready. A ready transcript can still be not
 
 An asset clusters cues that sound like one voice. That cluster is a speaker group. You assign the group a name, `quote`, `ending`, or `undetermined`. The utility does not choose the name.
 
-A summary does not require those labels.
+Label the speaker groups before you write a summary. Do not write a summary from the transcript text alone.
+
+The order is `poddrill start`, then poll `poddrill episode` until the transcript and the embedding are `ready`, then `poddrill cues` and `poddrill label-groups` from the speaker guide, then `poddrill start-summary`, `poddrill post-paragraph`, and `poddrill set-summary` from the summary guide. Present the text from `poddrill summary`. A summary written in chat before those commands is not the result.
 
 ## Summaries
 
@@ -83,7 +85,7 @@ Parse the JSON line on stdout. `episode` exits 0 when the id is unknown. `not-re
 
 ## Present the summary
 
-Present the summary in the format preferred or prescribed by users, but always grounded by the summary constructed via poddrill.
+Present the text returned by `poddrill summary`. Match the format the user asked for. Do not replace that text with a summary you wrote from the transcript.
 
 ## Guides
 
@@ -92,8 +94,8 @@ Each file tells you how to do one part of the task.
 - For a feed or a YouTube page, and for telling a new episode from one already handed to poddrill, read [references/track-sources.md](references/track-sources.md).
 - For finding the audio, downloading it, and writing the 16 kHz WAV, read [references/fetch-audio.md](references/fetch-audio.md).
 - For Japanese, Korean, or Chinese weights, read [references/select-models.md](references/select-models.md).
-- For a voice name, a quote, an ending, or cues left undetermined, read [references/assign-speakers.md](references/assign-speakers.md).
-- For an episode summary, read [references/create-summary.md](references/create-summary.md).
+- Before any summary, read [references/assign-speakers.md](references/assign-speakers.md) and label the groups.
+- After those labels, read [references/create-summary.md](references/create-summary.md) and store the summary with its commands.
 
 ## Finish
 

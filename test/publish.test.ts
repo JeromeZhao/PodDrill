@@ -113,3 +113,38 @@ test("a semver bump rewrites only the version files", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a summary follows speaker labels and the stored summary commands", async () => {
+  const skill = await readFile(join(root, ".agents", "skills", "poddrill", "SKILL.md"), "utf8");
+  const summary = await readFile(
+    join(root, ".agents", "skills", "poddrill", "references", "create-summary.md"),
+    "utf8",
+  );
+  assert.equal(skill.includes("A summary does not require those labels."), false);
+  assert.equal(skill.includes("Do not write a summary from the transcript text alone."), true);
+  const labelAt = skill.indexOf("poddrill label-groups");
+  const summaryAt = skill.indexOf("poddrill start-summary");
+  assert.equal(labelAt >= 0, true);
+  assert.equal(summaryAt > labelAt, true);
+  assert.equal(skill.includes("poddrill post-paragraph"), true);
+  assert.equal(skill.includes("poddrill set-summary"), true);
+  assert.equal(skill.includes("poddrill summary"), true);
+  assert.equal(summary.includes("Do not write a summary from the transcript text."), true);
+});
+
+test("setup instructions leave optional tools until a task needs them", async () => {
+  const skill = await readFile(join(root, ".agents", "skills", "poddrill", "SKILL.md"), "utf8");
+  const fetchAudio = await readFile(
+    join(root, ".agents", "skills", "poddrill", "references", "fetch-audio.md"),
+    "utf8",
+  );
+  const models = await readFile(
+    join(root, ".agents", "skills", "poddrill", "references", "select-models.md"),
+    "utf8",
+  );
+  assert.equal(skill.includes("yt-dlp"), false);
+  assert.equal(skill.includes("moonshine-voice"), false);
+  assert.equal(skill.includes("Ask the user before you install anything that guide names."), true);
+  assert.equal(fetchAudio.includes("Ask the user before you install yt-dlp."), true);
+  assert.equal(models.includes("Ask the user before you install moonshine-voice."), true);
+});
