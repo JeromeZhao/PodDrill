@@ -10,7 +10,7 @@ Copy this to the agent.
 Set up PodDrill on this computer.
 ```
 
-The supported install is the npm package. Run `npm install -g poddrill@0.2.1`. Do not use `@latest`. Cloning this repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`. The agent then follows the skill shipped in the package.
+The supported install is the npm package. Run `npm install -g poddrill@0.2.2`. Do not use `@latest`. Cloning this repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`. The agent then follows the skill shipped in the package.
 
 ## Requirements
 
