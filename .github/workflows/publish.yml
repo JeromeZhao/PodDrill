@@ -27,5 +27,8 @@ jobs:
           version="$(node --input-type=module -e "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.parse(readFileSync('package.json','utf8')).version)")"
           test "${GITHUB_REF_NAME}" = "v${version}"
           test "$(node dist/cli.js --version)" = "poddrill ${version}"
+          spec="poddrill@${version}"
+          grep -F -q "${spec}" README.md
+          grep -F -q "${spec}" .agents/skills/poddrill/SKILL.md
       - name: Publish
         run: npm publish
