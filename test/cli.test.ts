@@ -868,6 +868,39 @@ describe("poddrill cli", () => {
     }
   });
 
+  it("keeps paragraph cues when the owner is already running", async () => {
+    const root = await workspace();
+    const episodeId = "ep_0123456789abcdef";
+    const summaryId = "sm_6b7be0fd5a237c45";
+    const paragraph = {
+      text: "The guest says the city allows too few new homes.",
+      cues: ["c0002", "c0005"],
+    };
+    const unknown = line({ state: "unknown", episodeId });
+    try {
+      const setup = await run(root, ["setup", "--provider", "localhost", "--queue-length", "1"]);
+      assert.equal(setup.code, 0, setup.stderr);
+      const posted = await run(root, ["post-paragraph", episodeId, summaryId, JSON.stringify(paragraph)]);
+      assert.equal(posted.stdout, unknown);
+      assert.equal(posted.code, 0, posted.stderr);
+      const replaced = await run(root, [
+        "put-paragraph",
+        episodeId,
+        summaryId,
+        JSON.stringify({ index: 1, ...paragraph }),
+      ]);
+      assert.equal(replaced.code, 0, replaced.stderr);
+      assert.equal(replaced.stdout, unknown);
+      const tools = await mcpTools(root, [
+        { id: 2, name: "postParagraph", args: { episodeId, summaryId, ...paragraph } },
+      ]);
+      assert.equal(tools.get(2), unknown);
+    } finally {
+      await stopOwner(root);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("setup defaults to ~/poddrill and accepts grok-bot", async () => {
     const home = await workspace();
     try {
