@@ -31,7 +31,13 @@ Grok Bot cannot write its server entry. It prints the custom server to add: the 
 
 `npm test` runs the unit tests. Those tests use `node --experimental-strip-types`.
 
-`npm run test:smoke` runs a clean-home install, downloads the ECAPA file, and transcribes a short generated clip through `dist/cli.js`. It needs `python3` with `ensurepip`, `ffmpeg`, and `espeak-ng`. If one of those is missing, the test skips and names the missing tool. This repository has no CI workflow. Run `npm run test:smoke` on a computer that has those tools. Build `dist/` with `npm run build` first.
+`npm run test:smoke` runs a clean-home install, downloads the ECAPA file, and transcribes a short generated clip through `dist/cli.js`. It needs `python3` with `ensurepip`, `ffmpeg`, and `espeak-ng`. If one of those is missing, the test skips and names the missing tool. GitHub does not run these tests. Run `npm run test:smoke` on a computer that has those tools. Build `dist/` with `npm run build` first.
+
+## Publish
+
+Push a tag named `v` plus the version in `package.json`. `.github/workflows/publish.yml` publishes that commit to npm. The tag `v0.2.1` publishes version `0.2.1` and no other tag does.
+
+npmjs.com must list a GitHub Actions trusted publisher for user `JeromeZhao`, repository `PodDrill`, and workflow filename `publish.yml`, with direct `npm publish` allowed. Save that publisher before the first tag. The first publish from GitHub has to succeed within two days of saving it, or npm expires the publisher.
 
 ## License
 
