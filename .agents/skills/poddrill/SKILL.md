@@ -53,7 +53,7 @@ Read cues only after the embedding is ready. A ready transcript can still be not
 
 ## Speaker groups
 
-An asset clusters cues that sound like one voice. That cluster is a speaker group. You assign the group a name, `quote`, `ending`, or `undetermined`. The utility does not choose the name.
+An asset clusters cues that sound like one voice. That cluster is a speaker group. The embedding stage writes the groups before that stage is ready. You assign the group a name, `quote`, `ending`, or `undetermined`. The utility does not choose the name.
 
 Label the speaker groups before you write a summary. Do not write a summary from the transcript text alone.
 
