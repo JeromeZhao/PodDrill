@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { createWriteStream, realpathSync } from "node:fs";
 import { mkdir, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -15,7 +15,7 @@ export async function downloadTo(url, outputPath, expectedByteLength) {
   const expected = readExpectedByteLength(expectedByteLength);
   const destination = await canonicalPath(outputPath);
   const root = await gitRoot();
-  if (isInside(root, destination)) {
+  if (root !== undefined && isInside(root, destination)) {
     throw new Error(`refusing to write inside the git tree: ${destination}`);
   }
   await mkdir(path.dirname(destination), { recursive: true });
@@ -90,7 +90,7 @@ async function gitRoot() {
       }
       const parent = path.dirname(current);
       if (parent === current) {
-        throw new Error("refusing to download because no git tree contains the script");
+        return undefined;
       }
       current = parent;
     }
@@ -131,7 +131,8 @@ function parseCliByteLength(raw) {
 }
 
 const entry = process.argv[1];
-if (entry !== undefined && path.resolve(entry) === fileURLToPath(import.meta.url)) {
+const invoked = entry === undefined ? undefined : realpathSync(entry);
+if (invoked !== undefined && invoked === fileURLToPath(import.meta.url)) {
   const url = process.argv[2];
   const outputPath = process.argv[3];
   const rawLength = process.argv[4];

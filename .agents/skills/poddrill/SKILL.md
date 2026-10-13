@@ -55,7 +55,7 @@ Read cues only after the embedding is ready. A ready transcript can still be not
 
 An asset clusters cues that sound like one voice. That cluster is a speaker group. You assign the group a name, `quote`, `ending`, or `undetermined`. The utility does not choose the name.
 
-A summary does not require those labels.
+Label the speaker groups before you write a summary. Read the speaker guide and run the label commands. Then read the summary guide and store the summary with the PodDrill commands. Do not write a summary from the transcript text alone.
 
 ## Summaries
 

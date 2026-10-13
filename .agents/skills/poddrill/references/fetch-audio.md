@@ -12,7 +12,7 @@ Download that URL with the script in this skill. The file is `scripts/fetch-audi
 node <skill-dir>/scripts/fetch-audio.mjs <url> <output-path> [expected-bytes]
 ```
 
-The script refuses a destination inside the git tree that contains the script. Pass the byte length when the feed lists one. The script leaves an existing file of that size in place.
+Run this script even when the installed copy is not inside a git repository. Do not replace it with a script of your own. It refuses a destination inside a git tree that contains the script. Pass the byte length when the feed lists one. The script leaves an existing file of that size in place.
 
 ## yt-dlp
 
