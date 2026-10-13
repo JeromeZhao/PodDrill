@@ -3,11 +3,8 @@
  * Its ready frame is { "kind": "ready", "version": string }, checked against package.json.
  * Result: <needle.transcribe output>, parsed as `WhistleResult`.
  */
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { asRecord } from "./disk.js";
 import { parseWhistle } from "./episode.js";
+import { readPackageIdentity } from "./package-identity.js";
 import { PYTHON_FRAMES, spawnFramedWorker } from "./worker.js";
 /** Start one warm cactus-needle process. */
 export const spawnNeedleWorker = (events) => {
@@ -29,13 +26,8 @@ export const spawnNeedleWorker = (events) => {
     }, events);
 };
 export async function pinnedNeedleVersion() {
-    const packagePath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
-    const packageJson = asRecord(JSON.parse(await readFile(packagePath, "utf8")));
-    const version = packageJson === undefined ? undefined : packageJson["cactusNeedle"];
-    if (typeof version !== "string" || version.length === 0) {
-        throw new Error("package.json does not pin cactus-needle");
-    }
-    return version;
+    const identity = await readPackageIdentity(import.meta.url);
+    return identity.cactusNeedle;
 }
 const WORKER_SCRIPT = [
     PYTHON_FRAMES,

@@ -5,7 +5,8 @@ description: >-
   a summary whose paragraphs cite that text. The agent reads the text, names
   the voices, and writes the summary words. PodDrill stores the episode.
   Use when fetching episode audio, starting a transcript, labeling speakers,
-  or writing a summary. Do not use it to change the poddrill TypeScript.
+  or writing a summary. When a session has no PodDrill tools, register the
+  client before transcribing. Do not use it to change the poddrill TypeScript.
 ---
 
 # PodDrill
@@ -33,6 +34,18 @@ Summary is an asset of an episode. An episode can have multiple summary asset. Y
 ## The episode
 
 You keep the source list. The utility keeps the episode. The episode holds the transcript, the cues, the groups, the labels, and the summaries in your filesystem. Do not copy artifact state, progress, paths, or labels into the source list.
+
+## Register the client
+
+When this session has no PodDrill tools, register the client before setting up a workspace. `<version>` is the `version` field in this package's `package.json`. Do not use `@latest`.
+
+Run `npx -y poddrill@<version> client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client.
+
+Then run `npx -y poddrill@<version> client plan --client cursor --json`.
+
+After that plan is approved, run `npx -y poddrill@<version> client apply --yes --client cursor`.
+
+A later refresh of clients that already have an entry is `npx -y poddrill@<version> client plan --linked --json`, then `npx -y poddrill@<version> client apply --yes --linked` after approval. Grok Bot prints a sentence and does not write a config file. Add that custom server in the Grok Bot chat. It runs on the bot's computer.
 
 ## Set up once
 

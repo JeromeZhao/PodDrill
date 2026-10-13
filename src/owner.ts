@@ -8,6 +8,7 @@ import { appendAudit, auditRecord, readAudit } from "./audit.ts";
 import { errorCode } from "./disk.ts";
 import { IDLE_FLEET_MS, watchIdleFleet } from "./idle-fleet.ts";
 import { embedWeightsPath, openEmbedHost, type EmbedHost } from "./embed.ts";
+import { readPackageIdentity } from "./package-identity.ts";
 import { JobQueue } from "./jobs.ts";
 import { openWhistleCall, type WhistleHost } from "./provider.ts";
 import { readConfig, type WorkspaceRoot } from "./workspace.ts";
@@ -146,18 +147,22 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
   for (const connection of waiting.splice(0, waiting.length)) {
     accept(connection, opened, root);
   }
+  const version = mcpOnStdio ? (await readPackageIdentity(import.meta.url)).version : undefined;
   await shutdownOnSignal(
     server,
     sock,
     opened,
     hosts,
     stopIdle,
-    mcpOnStdio ? speakMcp(async (name, args) => callTool(opened, root, name, args)) : undefined,
+    version === undefined
+      ? undefined
+      : speakMcp(version, async (name, args) => callTool(opened, root, name, args)),
   );
 }
 
-export function proxyMcp(root: string): Promise<void> {
-  return speakMcp(async (name, args) => {
+export async function proxyMcp(root: string): Promise<void> {
+  const identity = await readPackageIdentity(import.meta.url);
+  return speakMcp(identity.version, async (name, args) => {
     if (name === "start" && typeof args["path"] === "string") {
       const language = args["language"];
       if (language !== undefined && typeof language !== "string") {
@@ -602,7 +607,7 @@ function closeIdle(server: ReturnType<typeof createServer>): Promise<void> {
   });
 }
 
-function speakMcp(callTool: ToolCall): Promise<void> {
+function speakMcp(version: string, callTool: ToolCall): Promise<void> {
   return new Promise((resolve) => {
     let buffer = Buffer.alloc(0);
     let chain = Promise.resolve();
@@ -611,7 +616,7 @@ function speakMcp(callTool: ToolCall): Promise<void> {
       const messages = takeMessages(buffer);
       buffer = messages.rest;
       for (const message of messages.bodies) {
-        chain = chain.then(() => respond(message, callTool)).catch((error: unknown) => {
+        chain = chain.then(() => respond(message, callTool, version)).catch((error: unknown) => {
           const messageText = error instanceof Error ? error.message : String(error);
           process.stderr.write(`${messageText}\n`);
         });
@@ -658,7 +663,7 @@ function takeMessages(buffer: Buffer): { readonly bodies: readonly unknown[]; re
   }
 }
 
-async function respond(message: unknown, callTool: ToolCall): Promise<void> {
+async function respond(message: unknown, callTool: ToolCall, version: string): Promise<void> {
   const record = asRecord(message);
   if (record === undefined || record["jsonrpc"] !== "2.0") {
     return;
@@ -675,7 +680,7 @@ async function respond(message: unknown, callTool: ToolCall): Promise<void> {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "poddrill", version: "0.0.0" },
+        serverInfo: { name: "poddrill", version },
       },
     });
     return;

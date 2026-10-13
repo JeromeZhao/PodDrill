@@ -5,6 +5,7 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { clientMain, workspaceSetupCollision } from "./client.ts";
 import { asRecord, errorCode } from "./disk.ts";
 import { isModelId, type ModelFleet, type ModelId, type ModelWeights } from "./models.ts";
 import { callOwner, ownerAlive, proxyMcp, render, serve } from "./owner.ts";
@@ -42,6 +43,11 @@ async function main(): Promise<void> {
     case "setup":
       await runSetup(process.argv.slice(3));
       return;
+    case "client": {
+      const rendered = await clientMain(process.argv.slice(3), process.env, import.meta.url);
+      await emit(rendered.text, rendered.exitCode);
+      return;
+    }
     case "start":
       await runStart(process.argv.slice(3));
       return;
@@ -84,6 +90,10 @@ async function main(): Promise<void> {
 }
 
 async function runSetup(args: readonly string[]): Promise<void> {
+  const collision = workspaceSetupCollision(args);
+  if (collision !== undefined) {
+    await emit(render({ kind: "error", message: collision }), 1);
+  }
   const provider = flag(args, "--provider");
   const queueText = flag(args, "--queue-length");
   const fleetText = flag(args, "--fleet-limit");

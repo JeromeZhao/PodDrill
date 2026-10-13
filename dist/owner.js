@@ -7,6 +7,7 @@ import { appendAudit, auditRecord, readAudit } from "./audit.js";
 import { errorCode } from "./disk.js";
 import { IDLE_FLEET_MS, watchIdleFleet } from "./idle-fleet.js";
 import { embedWeightsPath, openEmbedHost } from "./embed.js";
+import { readPackageIdentity } from "./package-identity.js";
 import { JobQueue } from "./jobs.js";
 import { openWhistleCall } from "./provider.js";
 import { readConfig } from "./workspace.js";
@@ -115,10 +116,14 @@ export async function serve(root, mcpOnStdio) {
     for (const connection of waiting.splice(0, waiting.length)) {
         accept(connection, opened, root);
     }
-    await shutdownOnSignal(server, sock, opened, hosts, stopIdle, mcpOnStdio ? speakMcp(async (name, args) => callTool(opened, root, name, args)) : undefined);
+    const version = mcpOnStdio ? (await readPackageIdentity(import.meta.url)).version : undefined;
+    await shutdownOnSignal(server, sock, opened, hosts, stopIdle, version === undefined
+        ? undefined
+        : speakMcp(version, async (name, args) => callTool(opened, root, name, args)));
 }
-export function proxyMcp(root) {
-    return speakMcp(async (name, args) => {
+export async function proxyMcp(root) {
+    const identity = await readPackageIdentity(import.meta.url);
+    return speakMcp(identity.version, async (name, args) => {
         if (name === "start" && typeof args["path"] === "string") {
             const language = args["language"];
             if (language !== undefined && typeof language !== "string") {
@@ -513,7 +518,7 @@ function closeIdle(server) {
         });
     });
 }
-function speakMcp(callTool) {
+function speakMcp(version, callTool) {
     return new Promise((resolve) => {
         let buffer = Buffer.alloc(0);
         let chain = Promise.resolve();
@@ -522,7 +527,7 @@ function speakMcp(callTool) {
             const messages = takeMessages(buffer);
             buffer = messages.rest;
             for (const message of messages.bodies) {
-                chain = chain.then(() => respond(message, callTool)).catch((error) => {
+                chain = chain.then(() => respond(message, callTool, version)).catch((error) => {
                     const messageText = error instanceof Error ? error.message : String(error);
                     process.stderr.write(`${messageText}\n`);
                 });
@@ -568,7 +573,7 @@ function takeMessages(buffer) {
         }
     }
 }
-async function respond(message, callTool) {
+async function respond(message, callTool, version) {
     const record = asRecord(message);
     if (record === undefined || record["jsonrpc"] !== "2.0") {
         return;
@@ -585,7 +590,7 @@ async function respond(message, callTool) {
             result: {
                 protocolVersion: "2024-11-05",
                 capabilities: { tools: {} },
-                serverInfo: { name: "poddrill", version: "0.0.0" },
+                serverInfo: { name: "poddrill", version },
             },
         });
         return;

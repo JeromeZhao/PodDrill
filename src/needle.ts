@@ -4,13 +4,9 @@
  * Result: <needle.transcribe output>, parsed as `WhistleResult`.
  */
 
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { asRecord } from "./disk.ts";
 import { parseWhistle, type WhistleResult } from "./episode.ts";
 import type { SpawnWorker } from "./fleet.ts";
+import { readPackageIdentity } from "./package-identity.ts";
 import { PYTHON_FRAMES, spawnFramedWorker, type WorkerFrame } from "./worker.ts";
 
 export interface WhistleQuery extends WorkerFrame {
@@ -41,13 +37,8 @@ export const spawnNeedleWorker: SpawnWorker<WhistleResult, WhistleQuery> = (even
 };
 
 export async function pinnedNeedleVersion(): Promise<string> {
-  const packagePath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
-  const packageJson = asRecord(JSON.parse(await readFile(packagePath, "utf8")));
-  const version = packageJson === undefined ? undefined : packageJson["cactusNeedle"];
-  if (typeof version !== "string" || version.length === 0) {
-    throw new Error("package.json does not pin cactus-needle");
-  }
-  return version;
+  const identity = await readPackageIdentity(import.meta.url);
+  return identity.cactusNeedle;
 }
 
 const WORKER_SCRIPT = [
