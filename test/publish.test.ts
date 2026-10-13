@@ -113,3 +113,14 @@ test("a semver bump rewrites only the version files", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a summary follows speaker labels and the stored summary commands", async () => {
+  const skill = await readFile(join(root, ".agents", "skills", "poddrill", "SKILL.md"), "utf8");
+  const summary = await readFile(
+    join(root, ".agents", "skills", "poddrill", "references", "create-summary.md"),
+    "utf8",
+  );
+  assert.equal(skill.includes("A summary does not require those labels."), false);
+  assert.equal(skill.includes("Do not write a summary from the transcript text alone."), true);
+  assert.equal(summary.includes("Do not write a summary from the transcript text."), true);
+});

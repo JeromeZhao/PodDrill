@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { copyFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -46,5 +47,38 @@ describe("downloadTo", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /refusing to write inside the git tree/);
     await assert.rejects(() => stat(join(repoRoot, "e292-out")), { code: "ENOENT" });
+  });
+
+  it("tries the download when the script is outside a git tree", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "poddrill-fetch-"));
+    const copied = join(dir, "fetch-audio.mjs");
+    const outputPath = join(dir, "out.mp3");
+    try {
+      await copyFile(scriptPath, copied);
+      const invoked = await realpath(copied);
+      const result = await new Promise<FetchRun>((resolveRun, rejectRun) => {
+        execFile(
+          process.execPath,
+          [invoked, "http://127.0.0.1:9/audio.mp3", outputPath],
+          { encoding: "utf8" },
+          (error, _stdout, stderr) => {
+            if (error === null) {
+              resolveRun({ code: 0, stderr });
+              return;
+            }
+            if (typeof error.code === "number") {
+              resolveRun({ code: error.code, stderr });
+              return;
+            }
+            rejectRun(error);
+          },
+        );
+      });
+      assert.equal(result.code, 1);
+      assert.equal(/git tree/.test(result.stderr), false);
+      assert.match(result.stderr, /download failed|fetch failed|ECONNREFUSED/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
