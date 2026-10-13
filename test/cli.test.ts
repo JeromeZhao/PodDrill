@@ -48,10 +48,37 @@ function envFor(root: string): NodeJS.ProcessEnv {
   return { ...process.env, PODDRILL_WORKSPACE: root };
 }
 
-function run(root: string, args: readonly string[], extra: NodeJS.ProcessEnv = {}): Promise<RunResult> {
+function execText(command: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, [...args], { encoding: "utf8" }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+async function livePython(): Promise<string> {
+  const executable = (await execText("python3", ["-c", "import sys; print(sys.executable)"])).trim();
+  assert.equal((await execText(executable, ["-c", "print('poddrill-python-ok')"])).trim(), "poddrill-python-ok");
+  return executable;
+}
+
+function run(
+  root: string,
+  args: readonly string[],
+  extra: NodeJS.ProcessEnv = {},
+  omit: readonly string[] = [],
+): Promise<RunResult> {
+  const env: NodeJS.ProcessEnv = { ...envFor(root), ...extra };
+  for (const key of omit) {
+    delete env[key];
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--experimental-strip-types", cliPath, ...args], {
-      env: { ...envFor(root), ...extra },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const out: Buffer[] = [];
@@ -774,8 +801,7 @@ describe("poddrill cli", () => {
 
   it("records an absolute python and mcp --selftest reports that env", async () => {
     const root = await workspace();
-    const python = join(root, "python-bin");
-    await writeFile(python, "");
+    const python = await livePython();
     try {
       const ready = await run(root, ["setup", "--provider", "cursor-cloud", "--queue-length", "1"], {
         PODDRILL_PYTHON: python,
@@ -802,6 +828,35 @@ describe("poddrill cli", () => {
       assert.equal(body["execPath"], process.execPath);
       assert.equal(seen["PODDRILL_PYTHON"], python);
       assert.equal(seen["PODDRILL_WORKSPACE"], root);
+      assert.equal((await execText(python, ["-c", "print('poddrill-python-ok')"])).trim(), "poddrill-python-ok");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("mcp --selftest uses the python stored in poddrill.json", async () => {
+    const root = await workspace();
+    const python = await livePython();
+    try {
+      const ready = await run(
+        root,
+        ["setup", "--provider", "localhost", "--queue-length", "1", "--python", python],
+        {},
+        ["PODDRILL_PYTHON"],
+      );
+      assert.equal(ready.code, 0, ready.stderr);
+      const stored = objectRecord(JSON.parse(await readFile(join(root, "poddrill.json"), "utf8")));
+      assert.equal(stored["python"], python);
+      const selftest = await run(root, ["mcp", "--selftest"], {}, ["PODDRILL_PYTHON"]);
+      assert.equal(selftest.code, 0, selftest.stderr);
+      const body = objectRecord(JSON.parse(selftest.stdout));
+      const seen = objectRecord(body["env"]);
+      const reported = seen["PODDRILL_PYTHON"];
+      assert.equal(reported, python);
+      if (typeof reported !== "string") {
+        return;
+      }
+      assert.equal((await execText(reported, ["-c", "print('poddrill-python-ok')"])).trim(), "poddrill-python-ok");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
