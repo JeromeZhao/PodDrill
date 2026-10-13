@@ -192,32 +192,22 @@ async function episodeUntil(root: string, episodeId: string, state: string): Pro
 }
 
 function frame(message: object): Buffer {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8");
-  return Buffer.concat([header, body]);
+  return Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
 }
 
 function toolText(buffer: Buffer, id: number): string | undefined {
   let rest = buffer;
   for (;;) {
-    const headerEnd = rest.indexOf("\r\n\r\n");
-    if (headerEnd === -1) {
+    const newline = rest.indexOf("\n");
+    if (newline === -1) {
       return undefined;
     }
-    const header = rest.subarray(0, headerEnd).toString("utf8");
-    const match = /Content-Length: (\d+)/i.exec(header);
-    const lengthText = match === null ? undefined : match[1];
-    if (lengthText === undefined) {
-      return undefined;
+    const line = rest.subarray(0, newline).toString("utf8");
+    rest = Buffer.from(rest.subarray(newline + 1));
+    if (line.trim() === "") {
+      continue;
     }
-    const length = Number(lengthText);
-    const start = headerEnd + 4;
-    if (!Number.isInteger(length) || rest.length < start + length) {
-      return undefined;
-    }
-    const body = rest.subarray(start, start + length).toString("utf8");
-    rest = Buffer.from(rest.subarray(start + length));
-    const text = textForId(JSON.parse(body), id);
+    const text = textForId(JSON.parse(line), id);
     if (text !== undefined) {
       return text;
     }
