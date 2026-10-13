@@ -192,32 +192,22 @@ async function episodeUntil(root: string, episodeId: string, state: string): Pro
 }
 
 function frame(message: object): Buffer {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8");
-  return Buffer.concat([header, body]);
+  return Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
 }
 
 function toolText(buffer: Buffer, id: number): string | undefined {
   let rest = buffer;
   for (;;) {
-    const headerEnd = rest.indexOf("\r\n\r\n");
-    if (headerEnd === -1) {
+    const newline = rest.indexOf("\n");
+    if (newline === -1) {
       return undefined;
     }
-    const header = rest.subarray(0, headerEnd).toString("utf8");
-    const match = /Content-Length: (\d+)/i.exec(header);
-    const lengthText = match === null ? undefined : match[1];
-    if (lengthText === undefined) {
-      return undefined;
+    const line = rest.subarray(0, newline).toString("utf8");
+    rest = Buffer.from(rest.subarray(newline + 1));
+    if (line.trim() === "") {
+      continue;
     }
-    const length = Number(lengthText);
-    const start = headerEnd + 4;
-    if (!Number.isInteger(length) || rest.length < start + length) {
-      return undefined;
-    }
-    const body = rest.subarray(start, start + length).toString("utf8");
-    rest = Buffer.from(rest.subarray(start + length));
-    const text = textForId(JSON.parse(body), id);
+    const text = textForId(JSON.parse(line), id);
     if (text !== undefined) {
       return text;
     }
@@ -246,6 +236,71 @@ function textForId(message: unknown, id: number): string | undefined {
   }
   const text = Object.fromEntries(Object.entries(first))["text"];
   return typeof text === "string" ? text : undefined;
+}
+
+function mcpInitialize(root: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-strip-types", cliPath, "mcp"], {
+      env: envFor(root),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdin = child.stdin;
+    const stdout = child.stdout;
+    if (stdin === null || stdout === null) {
+      reject(new Error("mcp pipes missing"));
+      return;
+    }
+    let settled = false;
+    let buffer = Buffer.alloc(0);
+    const timer = setTimeout(() => {
+      finish(() => {
+        child.kill("SIGTERM");
+        reject(new Error(`initialize timed out with ${JSON.stringify(buffer.toString("utf8"))}`));
+      });
+    }, 3000);
+    const finish = (action: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+    stdout.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      const line = buffer.subarray(0, newline + 1).toString("utf8");
+      finish(() => {
+        stdin.end();
+        resolve(line);
+      });
+    });
+    child.on("error", (error) => {
+      finish(() => {
+        reject(error);
+      });
+    });
+    child.on("close", (code) => {
+      finish(() => {
+        reject(new Error(`mcp exited ${code ?? 1} with ${JSON.stringify(buffer.toString("utf8"))}`));
+      });
+    });
+    stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "grok-shell-poddrill", version: "0" },
+        },
+      })}\n`,
+    );
+  });
 }
 
 function mcpTools(
@@ -779,6 +834,36 @@ describe("poddrill cli", () => {
       }
       assert.equal(version.stdout, `poddrill ${packageVersion}\n`);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a newline initialize", async () => {
+    const root = await workspace();
+    try {
+      const setup = await run(root, ["setup", "--provider", "localhost", "--queue-length", "1"]);
+      assert.equal(setup.code, 0, setup.stderr);
+      const manifest = objectRecord(JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")));
+      const packageVersion = manifest["version"];
+      assert.equal(typeof packageVersion, "string");
+      if (typeof packageVersion !== "string") {
+        return;
+      }
+      const stdout = await mcpInitialize(root);
+      assert.equal(
+        stdout,
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            protocolVersion: "2024-11-05",
+            capabilities: { tools: {} },
+            serverInfo: { name: "poddrill", version: packageVersion },
+          },
+        })}\n`,
+      );
+    } finally {
+      await stopOwner(root);
       await rm(root, { recursive: true, force: true });
     }
   });

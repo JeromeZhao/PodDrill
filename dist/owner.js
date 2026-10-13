@@ -571,28 +571,17 @@ function takeMessages(buffer) {
     const bodies = [];
     let rest = buffer;
     for (;;) {
-        const headerEnd = rest.indexOf("\r\n\r\n");
-        if (headerEnd === -1) {
+        const newline = rest.indexOf("\n");
+        if (newline === -1) {
             return { bodies, rest };
         }
-        const header = rest.subarray(0, headerEnd).toString("utf8");
-        const match = /Content-Length: (\d+)/i.exec(header);
-        if (match === null) {
-            return { bodies, rest: Buffer.alloc(0) };
+        const line = rest.subarray(0, newline).toString("utf8");
+        rest = Buffer.from(rest.subarray(newline + 1));
+        if (line.trim() === "") {
+            continue;
         }
-        const lengthText = match[1];
-        if (lengthText === undefined) {
-            return { bodies, rest: Buffer.alloc(0) };
-        }
-        const length = Number(lengthText);
-        const start = headerEnd + 4;
-        if (!Number.isInteger(length) || rest.length < start + length) {
-            return { bodies, rest };
-        }
-        const body = rest.subarray(start, start + length).toString("utf8");
-        rest = Buffer.from(rest.subarray(start + length));
         try {
-            bodies.push(JSON.parse(body));
+            bodies.push(JSON.parse(line));
         }
         catch {
             bodies.push(undefined);
@@ -784,9 +773,7 @@ function toolList() {
     ];
 }
 function writeMessage(message) {
-    const body = Buffer.from(JSON.stringify(message), "utf8");
-    const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8");
-    process.stdout.write(Buffer.concat([header, body]));
+    process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 function asRecord(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
