@@ -1,0 +1,31 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm CLI that can sign in with GitHub
+        run: npm install -g npm@11.5.1
+      - name: Install runtime dependencies
+        run: npm install --omit=dev
+      - name: Require the tag to match package.json
+        run: |
+          version="$(node --input-type=module -e "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.parse(readFileSync('package.json','utf8')).version)")"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          test "$(node dist/cli.js --version)" = "poddrill ${version}"
+      - name: Publish
+        run: npm publish
