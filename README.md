@@ -1,18 +1,37 @@
 # PodDrill
 
-PodDrill is a skill that transcribes episode audio into timed text, groups the voices, and stores a summary.
+PodDrill is a tool that helps an agent to transcribe podcast audio into timed text, group the voices, and store a summary. It provides an agent skill and a set of best practices how to summarize a podcast efficiently and with clear structures.
 
-## Say this
+## Quick start
 
-Copy this to the agent.
+### Set up your agent
+
+Ask your agent:
 
 ```text
 Set up PodDrill skill and tool: https://github.com/JeromeZhao/PodDrill
 ```
 
+### Monitor a podcast
+
+Set up a monitor on a podcast and summarize new episode:
+
+```text
+/PodDrill monitor <podcast name you want to monitor> podcast and summary newly released episode.
+```
+
+### Summarize your own way
+
+Identify books mentioned in an episode and what it is about:
+
+```text
+/PodDrill for new episode from <podcast name you want to monitor>, extract what books it mentioned and what the book is about.
+```
+
+## For LLM and Agent
 The supported install is the npm package. Run `npm install -g poddrill@0.2.2`. Do not use `@latest`. Cloning this repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`. The agent then follows the skill shipped in the package.
 
-## Requirements
+### Requirements
 
 The computer that runs PodDrill needs:
 
