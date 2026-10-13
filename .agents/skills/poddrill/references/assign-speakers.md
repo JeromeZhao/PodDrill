@@ -15,8 +15,15 @@ These are suggestions, not rules. Use your best information and judgement.
 - If the lines just before a voice group say a clip is about to play, the group may be a quote. Read the line before it and the line after it.
 - If the hosts have said goodbye and the next lines are a song or a short sign-off, those lines may be the ending. They may stay without a host name.
 
+## Try Your Best Effort
+
+Use podcast episode information, web search and whatever you have access to with best effort to identify the name of the speaker.
+
+Do not identify the speaker name generally as "the host", "the guest" etc unless it is intended to be anonymous or you really cannot link one with high confidence.
+
 ## When to stop
 
 About 95 percent of spoken time with a host name is enough. Leave the remaining cues `undetermined`. That does not block later work.
 
 Do not copy a name from the nearest group. Do not match a repeated phrase. Do not guess from a handoff. Do not use show notes.
+

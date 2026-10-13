@@ -57,6 +57,8 @@ An asset clusters cues that sound like one voice. That cluster is a speaker grou
 
 Label the speaker groups before you write a summary. Do not write a summary from the transcript text alone.
 
+Use podcast episode information, web search and whatever you have access to with best effort to identify the name of the speaker. Do not identify the speaker name generally as "the host", "the guest" etc unless it is intended to be anonymous or you really cannot link one with high confidence.
+
 The order is `poddrill start`, then poll `poddrill episode` until the transcript and the embedding are `ready`, then `poddrill cues` and `poddrill label-groups` from the speaker guide, then `poddrill start-summary`, `poddrill post-paragraph`, and `poddrill set-summary` from the summary guide. Present the text from `poddrill summary`. A summary written in chat before those commands is not the result.
 
 ## Summaries
@@ -85,7 +87,7 @@ Parse the JSON line on stdout. `episode` exits 0 when the id is unknown. `not-re
 
 ## Present the summary
 
-Present the text returned by `poddrill summary`. Match the format the user asked for. Do not replace that text with a summary you wrote from the transcript.
+Present the text returned by `poddrill summary`. Do not include cue id. Match the format and style the user asked for.
 
 ## Guides
 

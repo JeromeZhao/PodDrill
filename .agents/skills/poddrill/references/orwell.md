@@ -46,6 +46,11 @@ Name the person or the body that acted, when the cues name them. "It was argued"
 
 **Use.** The guest says the city builds too few homes near jobs.
 
+Be specific about the name, use first name to refer to a person, and use the last name if in the same context more than one people share the same first name. "The guest says" is ambiguous, "Jack says" is specific.
+
+**Weak.** The guest says it is hard to get people to say yes.
+**Use.** Peter says it is hard to get people to say yes.
+
 ## Use an everyday word
 
 Never use a foreign phrase, a scientific word or a jargon word if you can think of an everyday English equivalent.
