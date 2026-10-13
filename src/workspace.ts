@@ -87,8 +87,6 @@ export interface SliceFiles {
 export interface SetupReport {
   readonly dirs: WorkspaceDirs;
   readonly config: WorkspaceConfig;
-  /** The `mcp.json` entry for Cursor, as JSON text. */
-  readonly mcpEntry: string;
 }
 
 /** The owner reads `poddrill.json` only at boot, so a live owner would keep running the old config. */
@@ -220,11 +218,6 @@ export async function setupWorkspace(input: {
     report: {
       dirs,
       config,
-      mcpEntry: JSON.stringify(
-        { mcpServers: { poddrill: { command: "poddrill", args: ["mcp"] } } },
-        null,
-        2,
-      ),
     },
   };
 }

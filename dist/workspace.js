@@ -106,7 +106,6 @@ export async function setupWorkspace(input) {
         report: {
             dirs,
             config,
-            mcpEntry: JSON.stringify({ mcpServers: { poddrill: { command: "poddrill", args: ["mcp"] } } }, null, 2),
         },
     };
 }
