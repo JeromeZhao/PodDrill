@@ -19,7 +19,7 @@ Do this once on the computer that will transcribe. Each step is safe to repeat. 
 
 1. Install Node.js 20.19 or newer and `ffmpeg`. Use the Node `.tar.gz` archive from `https://nodejs.org/dist/v20.19.0/`, or run `npx -y node@20.19.0`. On macOS, `brew install ffmpeg`. On Linux, `sudo apt-get install -y ffmpeg`.
 
-2. Install the npm package. Run `npm install -g poddrill@0.2.1`. Do not use `@latest`. Cloning the git repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`.
+2. Install the npm package. Run `npm install -g poddrill@0.2.2`. Do not use `@latest`. Cloning the git repository is not required. If you clone it, set `GIT_TERMINAL_PROMPT=0`.
 
 3. Run `poddrill install-python`. This creates `~/.cache/poddrill/venv` and installs cactus-needle 3.2.0, numpy 2.5.4, and onnxruntime 1.31.0. It uses `uv` when `uv` is on PATH, and otherwise `python3 -m venv`. The npm package named cactus-needle is a different package.
 
