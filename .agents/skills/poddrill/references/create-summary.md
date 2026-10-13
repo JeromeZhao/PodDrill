@@ -6,33 +6,43 @@ Read the cues first with `poddrill cues`. Page them as in [Speaker assignment](a
 
 The requirement is what the user asked you to summarize. Cite the cues that answer the requirement. You do not need to include a cue if it does not contribute to answering the requirement.
 
-Before you write, mark the parts that are actually there. An episode can hold several. A part the cues do not support is left out.
+Before you write, mark the parts that are actually there. An episode can hold several. A part the cues do not support is left out. When you mark a part, mark which cues hold each piece below. A piece the speaker never gives is absent. Do not invent it.
 
 ### News commentary
 
-News commentary is what happened, and the opinions on what happened. An opinion is that person's statement about what happened.
+What happened. Each opinion about it. Who holds that opinion.
 
 ### Explanation
 
-An explanation is how something works or why it is that way.
+How it works or why it is that way. Naming the subject is not that piece.
 
 ### Advice
 
-Advice is what the listener should do, how they should decide, or how to get better.
+What the listener should do. When the speaker gives a how or a decision rule, include that piece.
 
 ### Claim
 
-A claim is what someone holds, how they elaborate it, and the backup they offer. The elaboration is how they explain the claim. A claim can include a correction of who is speaking, and a place they stop.
+What the speaker holds, including a hedge. How they explain it. The evidence they give. When the cues correct who is speaking, or show where they stop, include that piece.
 
 ### Discussion
 
-A discussion is one topic, the perspectives on that topic, and how the people respond to each other. A perspective is a claim.
+The topic. Each person's view, written as a claim. How the people respond to each other.
+
+## Check coverage
+
+The paragraph `text` and its `cues` must include every piece the speaker gave for that part. When a part spans several paragraphs, check those paragraphs together.
+
+When a piece the type normally has is absent, say so in the paragraph. Write "He gives no reason." Do not leave the gap unstated.
+
+A hedge is part of what the speaker holds. Keep it. The rule in [Orwell's rules](orwell.md) that cuts a word does not remove a hedge.
+
+Before `setSummary`, check every marked part. Replace a paragraph that misses a piece the speaker gave with `putParagraph`. The summary must not state a part more completely, or more certainly, than its paragraphs do.
 
 ## Paragraphs and the summary
 
 A cue belongs in a paragraph when it supports a part you marked for the requirement.
 
-You decide how the parts sit in the paragraphs. A part may take more than one paragraph. Link the cues that belong to one part, and cover what holds that part together. The summary written from those paragraphs stays clear, concise, and structured.
+You decide how the parts sit in the paragraphs. A part may take more than one paragraph. Link the cues that belong to one part. Then run the coverage check.
 
 Write `summary` after those paragraphs exist. Write it from the paragraph `text`.
 
@@ -94,7 +104,7 @@ The MCP tool is `putParagraph`. Pass `episodeId`, `summaryId`, `index`, `text`, 
 
 ## Set the episode summary
 
-Write this after the paragraphs. `setSummary` rejects a file that has no paragraphs.
+Write this after the paragraphs, and after the coverage check. `setSummary` rejects a file that has no paragraphs.
 
 `summary` is the prose for the whole episode. Those words follow [Orwell's rules](orwell.md). An empty string is rejected.
 

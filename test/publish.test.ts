@@ -130,6 +130,9 @@ test("a summary follows speaker labels and the stored summary commands", async (
   assert.equal(skill.includes("poddrill set-summary"), true);
   assert.equal(skill.includes("poddrill summary"), true);
   assert.equal(summary.includes("Do not write a summary from the transcript text."), true);
+  assert.equal(summary.includes("A piece the speaker never gives is absent."), true);
+  assert.equal(summary.includes("He gives no reason."), true);
+  assert.equal(summary.includes("Before `setSummary`, check every marked part."), true);
 });
 
 test("setup instructions leave optional tools until a task needs them", async () => {
