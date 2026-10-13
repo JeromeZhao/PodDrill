@@ -1,17 +1,11 @@
-/**
- * Clean-home install: venv, ECAPA download, grok-bot setup, then a short WAV.
- * Skipped unless PODDRILL_SMOKE=1. Uses the built dist/cli.js, not the TypeScript sources.
- */
-
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const enabled = process.env["PODDRILL_SMOKE"] === "1";
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
 interface RunResult {
@@ -167,8 +161,51 @@ function cleanEnv(home: string, workspace: string): NodeJS.ProcessEnv {
   return env;
 }
 
-describe("smoke", { skip: enabled ? false : "set PODDRILL_SMOKE=1" }, () => {
-  it("transcribes and embeds a generated clip from a clean home", async () => {
+function commandOk(command: string, args: readonly string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(ok);
+    };
+    const child = spawn(command, [...args], { stdio: "ignore" });
+    child.on("error", () => {
+      finish(false);
+    });
+    child.on("close", (code) => {
+      finish(code === 0);
+    });
+  });
+}
+
+async function smokeSkipReason(): Promise<string | undefined> {
+  const probes: readonly (readonly [string, readonly string[]])[] = [
+    ["python3", ["-c", "import ensurepip"]],
+    ["ffmpeg", ["-version"]],
+    ["espeak-ng", ["--version"]],
+  ];
+  const missing: string[] = [];
+  for (const [command, args] of probes) {
+    if (!(await commandOk(command, args))) {
+      missing.push(command === "python3" ? "python3 with ensurepip" : command);
+    }
+  }
+  if (missing.length === 0) {
+    return undefined;
+  }
+  return `skipped: ${missing.join(", ")} unavailable`;
+}
+
+describe("smoke", () => {
+  it("transcribes and embeds a generated clip from a clean home", async (t: TestContext) => {
+    const reason = await smokeSkipReason();
+    if (reason !== undefined) {
+      t.skip(reason);
+      return;
+    }
     const home = await realpath(await mkdtemp(join(tmpdir(), "poddrill-smoke-home-")));
     const workspace = await realpath(await mkdtemp(join(tmpdir(), "poddrill-smoke-ws-")));
     const env = cleanEnv(home, workspace);

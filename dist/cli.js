@@ -8,9 +8,9 @@ import { asRecord, errorCode, pathExists } from "./disk.js";
 import { embedWeightsPath } from "./embed.js";
 import { isModelId } from "./models.js";
 import { nodeInstallMessage, nodeMeetsMinimum } from "./node-version.js";
-import { callOwner, ownerAlive, proxyMcp, render, serve } from "./owner.js";
+import { callOwner, ownerAlive, proxyMcp, pythonForOwner, render, serve } from "./owner.js";
 import { readPackageIdentity } from "./package-identity.js";
-import { installPython, resolvePython } from "./python-env.js";
+import { installPython } from "./python-env.js";
 import { fetchEcapa } from "./weights.js";
 import { defaultWorkspacePath, resolveWorkspace, setupWorkspace } from "./workspace.js";
 const usage = [
@@ -340,7 +340,8 @@ async function runStop() {
 }
 async function runMcp(args) {
     if (args.includes("--selftest")) {
-        const python = await resolvePython(process.env);
+        const root = await resolveWorkspace(process.env);
+        const python = await pythonForOwner(process.env, root);
         await emit(render({
             kind: "ready",
             execPath: process.execPath,

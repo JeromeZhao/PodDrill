@@ -12,6 +12,10 @@ import { JobQueue } from "./jobs.js";
 import { openWhistleCall } from "./provider.js";
 import { resolvePython } from "./python-env.js";
 import { readConfig } from "./workspace.js";
+export async function pythonForOwner(env, root) {
+    const config = await readConfig(root);
+    return resolvePython(env, config.python);
+}
 /**
  * macOS rejects a unix socket path longer than 104 bytes.
  * A workspace under /var/folders exceeds that, so the socket lives in the temp dir.
@@ -79,7 +83,7 @@ export async function serve(root, mcpOnStdio) {
         return;
     }
     const config = await readConfig(root);
-    const python = await resolvePython(process.env, config.python);
+    const python = await pythonForOwner(process.env, root);
     process.env["PODDRILL_PYTHON"] = python;
     const hosts = {
         whistle: openWhistleCall(config.provider, {

@@ -14,6 +14,14 @@ import { openWhistleCall, type WhistleHost } from "./provider.ts";
 import { resolvePython } from "./python-env.ts";
 import { readConfig, type WorkspaceRoot } from "./workspace.ts";
 
+export async function pythonForOwner(
+  env: Readonly<Record<string, string | undefined>>,
+  root: WorkspaceRoot,
+): Promise<string> {
+  const config = await readConfig(root);
+  return resolvePython(env, config.python);
+}
+
 type OwnerRequest =
   | { readonly op: "ping" }
   | { readonly op: "audit"; readonly episodeId: string }
@@ -112,7 +120,7 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
     return;
   }
   const config = await readConfig(root);
-  const python = await resolvePython(process.env, config.python);
+  const python = await pythonForOwner(process.env, root);
   process.env["PODDRILL_PYTHON"] = python;
   const hosts: OwnerHosts = {
     whistle: openWhistleCall(config.provider, {

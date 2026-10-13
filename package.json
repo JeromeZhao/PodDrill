@@ -23,7 +23,8 @@
   "cactusNeedle": "3.2.0",
   "scripts": {
     "build": "node scripts/build-js.mjs",
-    "test": "node --experimental-strip-types --test test/episode.test.ts test/fleet.test.ts test/idle-fleet.test.ts test/jobs.test.ts test/cues.test.ts test/summary.test.ts test/cli.test.ts test/audit.test.ts test/needle.test.ts test/publish.test.ts test/client.test.ts test/runtime.test.ts test/harness/run.test.ts"
+    "test": "node --experimental-strip-types --test test/episode.test.ts test/fleet.test.ts test/idle-fleet.test.ts test/jobs.test.ts test/cues.test.ts test/summary.test.ts test/cli.test.ts test/audit.test.ts test/needle.test.ts test/publish.test.ts test/client.test.ts test/runtime.test.ts test/harness/run.test.ts",
+    "test:smoke": "node --experimental-strip-types --test test/smoke.test.ts"
   },
   "dependencies": {
     "yaml": "2.9.1"

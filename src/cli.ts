@@ -10,9 +10,9 @@ import { asRecord, errorCode, pathExists } from "./disk.ts";
 import { embedWeightsPath } from "./embed.ts";
 import { isModelId, type ModelFleet, type ModelId, type ModelWeights } from "./models.ts";
 import { nodeInstallMessage, nodeMeetsMinimum } from "./node-version.ts";
-import { callOwner, ownerAlive, proxyMcp, render, serve } from "./owner.ts";
+import { callOwner, ownerAlive, proxyMcp, pythonForOwner, render, serve } from "./owner.ts";
 import { readPackageIdentity } from "./package-identity.ts";
-import { installPython, resolvePython } from "./python-env.ts";
+import { installPython } from "./python-env.ts";
 import { fetchEcapa } from "./weights.ts";
 import { defaultWorkspacePath, resolveWorkspace, setupWorkspace, type SetupResult } from "./workspace.ts";
 
@@ -405,7 +405,8 @@ async function runStop(): Promise<void> {
 
 async function runMcp(args: readonly string[]): Promise<void> {
   if (args.includes("--selftest")) {
-    const python = await resolvePython(process.env);
+    const root = await resolveWorkspace(process.env);
+    const python = await pythonForOwner(process.env, root);
     await emit(
       render({
         kind: "ready",
