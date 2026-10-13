@@ -11,7 +11,7 @@ import { socketPath } from "../src/owner.ts";
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const sampleRate = 16_000;
-const macFailure = "mac provider requires cactus-needle, which is not installed in this process";
+const macFailure = "cactus-needle is not installed. Run poddrill install-python.";
 
 interface RunResult {
   readonly code: number;
@@ -48,10 +48,10 @@ function envFor(root: string): NodeJS.ProcessEnv {
   return { ...process.env, PODDRILL_WORKSPACE: root };
 }
 
-function run(root: string, args: readonly string[]): Promise<RunResult> {
+function run(root: string, args: readonly string[], extra: NodeJS.ProcessEnv = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--experimental-strip-types", cliPath, ...args], {
-      env: envFor(root),
+      env: { ...envFor(root), ...extra },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const out: Buffer[] = [];
@@ -324,7 +324,7 @@ describe("poddrill cli", () => {
         message: [
           "poddrill serve is running with provider localhost, queue length 2, fleet limit 1,",
           "and embedding limit 1.",
-          "Stop it before changing the setup.",
+          "Stop it with poddrill stop before changing the setup.",
         ].join(" "),
       });
       const refused = await run(root, ["setup", "--provider", "localhost", "--queue-length", "3"]);
@@ -408,10 +408,12 @@ describe("poddrill cli", () => {
         kind: "error",
         message: [
           "usage: poddrill setup --provider <id> --queue-length <n> [--fleet-limit <n>] [--whistle-limit <n>]",
-          "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>]",
+          "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>] [--python <path>]",
+          "| install-python | fetch-weights | bootstrap [--provider <id>] [--queue-length <n>]",
           "| start <path> [--language <code>] | episode <episodeId> | cues <episodeId> [--limit <n>] [--after <cueId>] [--group-id <id>] [--hosts]",
           "| label-groups <episodeId> <json> | start-summary <episodeId> | set-summary <episodeId> <summaryId> <json>",
-          "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId> | serve | mcp",
+          "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId>",
+          "| serve | stop | mcp [--selftest] | --help | --version",
         ].join(" "),
       });
       for (const bad of [
@@ -676,10 +678,12 @@ describe("poddrill cli", () => {
           kind: "error",
           message: [
             "usage: poddrill setup --provider <id> --queue-length <n> [--fleet-limit <n>] [--whistle-limit <n>]",
-            "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>]",
+            "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>] [--python <path>]",
+            "| install-python | fetch-weights | bootstrap [--provider <id>] [--queue-length <n>]",
             "| start <path> [--language <code>] | episode <episodeId> | cues <episodeId> [--limit <n>] [--after <cueId>] [--group-id <id>] [--hosts]",
             "| label-groups <episodeId> <json> | start-summary <episodeId> | set-summary <episodeId> <summaryId> <json>",
-            "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId> | serve | mcp",
+            "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId>",
+            "| serve | stop | mcp [--selftest] | --help | --version",
           ].join(" "),
         }),
       );
@@ -723,6 +727,100 @@ describe("poddrill cli", () => {
       assert.equal(unknown.code, 0, unknown.stderr);
       assert.equal(unknown.stdout, line({ state: "unknown", episodeId: unknownId }));
       assert.deepEqual(await readdir(join(root, "episodes")), [episodeId]);
+    } finally {
+      await stopOwner(root);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prints help and version on exit 0", async () => {
+    const root = await workspace();
+    try {
+      const help = await run(root, ["--help"]);
+      assert.equal(help.code, 0, help.stderr);
+      assert.equal(help.stdout.includes("install-python"), true);
+      assert.equal(help.stdout.includes("fetch-weights"), true);
+      assert.equal(help.stdout.includes("stop"), true);
+      assert.equal(help.stdout.includes("\n"), true);
+      const version = await run(root, ["--version"]);
+      assert.equal(version.code, 0, version.stderr);
+      const manifest = objectRecord(JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")));
+      const packageVersion = manifest["version"];
+      assert.equal(typeof packageVersion, "string");
+      if (typeof packageVersion !== "string") {
+        return;
+      }
+      assert.equal(version.stdout, `poddrill ${packageVersion}\n`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("setup defaults to ~/poddrill and accepts grok-bot", async () => {
+    const home = await workspace();
+    try {
+      const ready = await run(home, ["setup", "--provider", "grok-bot", "--queue-length", "1"], {
+        HOME: home,
+        PODDRILL_WORKSPACE: "",
+      });
+      assert.equal(ready.code, 0, ready.stderr);
+      assert.equal(ready.stdout, line({ kind: "ready", provider: "grok-bot", queueLength: 1, fleetLimit: 1, embeddingLimit: 1 }));
+      const config = objectRecord(JSON.parse(await readFile(join(home, "poddrill", "poddrill.json"), "utf8")));
+      assert.equal(config["provider"], "grok-bot");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("records an absolute python and mcp --selftest reports that env", async () => {
+    const root = await workspace();
+    const python = join(root, "python-bin");
+    await writeFile(python, "");
+    try {
+      const ready = await run(root, ["setup", "--provider", "cursor-cloud", "--queue-length", "1"], {
+        PODDRILL_PYTHON: python,
+      });
+      assert.equal(ready.code, 0, ready.stderr);
+      assert.equal(
+        ready.stdout,
+        line({
+          kind: "ready",
+          provider: "cursor-cloud",
+          queueLength: 1,
+          fleetLimit: 1,
+          embeddingLimit: 1,
+          python,
+        }),
+      );
+      const stored = objectRecord(JSON.parse(await readFile(join(root, "poddrill.json"), "utf8")));
+      assert.equal(stored["python"], python);
+      const selftest = await run(root, ["mcp", "--selftest"], { PODDRILL_PYTHON: python });
+      assert.equal(selftest.code, 0, selftest.stderr);
+      const body = objectRecord(JSON.parse(selftest.stdout));
+      const seen = objectRecord(body["env"]);
+      assert.equal(body["kind"], "ready");
+      assert.equal(body["execPath"], process.execPath);
+      assert.equal(seen["PODDRILL_PYTHON"], python);
+      assert.equal(seen["PODDRILL_WORKSPACE"], root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stop ends a running owner and is safe when none is running", async () => {
+    const root = await workspace();
+    try {
+      const setup = await run(root, ["setup", "--provider", "localhost", "--queue-length", "1"]);
+      assert.equal(setup.code, 0, setup.stderr);
+      const idle = await run(root, ["stop"]);
+      assert.equal(idle.code, 0, idle.stderr);
+      assert.equal(idle.stdout, line({ kind: "ready", state: "stopped" }));
+      const episode = await run(root, ["episode", "ep_0000000000000000"]);
+      assert.equal(episode.code, 0, episode.stderr);
+      const stopped = await run(root, ["stop"]);
+      assert.equal(stopped.code, 0, stopped.stderr);
+      assert.equal(stopped.stdout, line({ kind: "ready", state: "stopped" }));
+      await waitUntilQuiet(root);
     } finally {
       await stopOwner(root);
       await rm(root, { recursive: true, force: true });

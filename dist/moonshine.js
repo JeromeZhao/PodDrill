@@ -1,10 +1,11 @@
 /**
- * The local Moonshine worker. One python3 process constructs one `Transcriber`.
+ * The local Moonshine worker. One Python process constructs one `Transcriber`.
  * Ready frame: { "kind": "ready" }. Result: lines mapped onto `WhistleResult`.
  */
 import { asRecord } from "./disk.js";
+import { moonshineInstallLine } from "./python-env.js";
 import { PYTHON_FRAMES, spawnFramedWorker } from "./worker.js";
-const INSTALL_MESSAGE = "pip install moonshine-voice";
+const INSTALL_MESSAGE = moonshineInstallLine();
 /** A missing `moonshine_voice` module becomes the install line. Any other text stays. */
 export function moonshineFailureMessage(text) {
     if (text.includes("ModuleNotFoundError") && text.includes("moonshine_voice")) {

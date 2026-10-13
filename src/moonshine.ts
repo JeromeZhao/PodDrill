@@ -1,5 +1,5 @@
 /**
- * The local Moonshine worker. One python3 process constructs one `Transcriber`.
+ * The local Moonshine worker. One Python process constructs one `Transcriber`.
  * Ready frame: { "kind": "ready" }. Result: lines mapped onto `WhistleResult`.
  */
 
@@ -7,9 +7,10 @@ import type { WhistleResult, WhistleWord } from "./episode.ts";
 import { asRecord } from "./disk.ts";
 import type { SpawnWorker } from "./fleet.ts";
 import type { LanguageModel } from "./models.ts";
+import { moonshineInstallLine } from "./python-env.ts";
 import { PYTHON_FRAMES, spawnFramedWorker, type WorkerFrame } from "./worker.ts";
 
-const INSTALL_MESSAGE = "pip install moonshine-voice";
+const INSTALL_MESSAGE = moonshineInstallLine();
 
 type MoonshineModel = Extract<LanguageModel, { readonly engine: "moonshine" }>;
 

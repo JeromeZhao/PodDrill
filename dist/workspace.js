@@ -4,11 +4,11 @@
  */
 import { randomBytes } from "node:crypto";
 import { mkdir, realpath, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { asRecord, errorCode, pathExists, readJsonFile } from "./disk.js";
 import { isModelId, modelIds } from "./models.js";
-import { isProviderId, providerIds } from "./provider.js";
+import { homeFromEnv } from "./python-env.js";
+import { isProviderId, providerIds, refuseUnwiredTransport, providerTransport } from "./provider.js";
 /** Every artifact an episode lists, in the order it lists them. */
 export const artifactKinds = ["transcript", "embedding"];
 const CONFIG_FILE = "poddrill.json";
@@ -18,10 +18,17 @@ const ARTIFACT_OUTPUTS = {
     transcript: "transcript.vtt",
     embedding: "embedding.json",
 };
+/** `PODDRILL_WORKSPACE`, else `~/poddrill`. Setup and every other command use this path. */
+export function defaultWorkspacePath(env) {
+    const configured = env["PODDRILL_WORKSPACE"];
+    if (configured !== undefined && configured !== "") {
+        return resolve(configured);
+    }
+    return resolve(join(homeFromEnv(env), "poddrill"));
+}
 /** `PODDRILL_WORKSPACE`, else `~/poddrill`, resolved with realpath. */
 export async function resolveWorkspace(env) {
-    const configured = env["PODDRILL_WORKSPACE"];
-    const candidate = resolve(configured === undefined || configured === "" ? join(homedir(), "poddrill") : configured);
+    const candidate = defaultWorkspacePath(env);
     let root;
     try {
         root = asWorkspaceRoot(await realpath(candidate));
@@ -56,6 +63,7 @@ export async function setupWorkspace(input) {
     if (!isProviderId(input.provider)) {
         throw new Error(`unknown provider ${input.provider}. Use one of ${providerIds.join(", ")}.`);
     }
+    refuseUnwiredTransport(input.provider, providerTransport(input.provider));
     if (!isCount(input.queueLength)) {
         throw new Error(`queue length must be a positive integer, got ${input.queueLength}`);
     }
@@ -65,12 +73,16 @@ export async function setupWorkspace(input) {
     if (input.embeddingLimit !== undefined && !isCount(input.embeddingLimit)) {
         throw new Error(`embedding limit must be a positive integer, got ${input.embeddingLimit}`);
     }
+    if (input.python !== undefined && !isAbsolute(input.python)) {
+        throw new Error(`python must be an absolute path, got ${input.python}`);
+    }
     const requested = resolve(input.root);
     const current = parseConfig(await readJsonFile(join(requested, CONFIG_FILE)));
     const modelFleet = input.modelFleet ?? current?.modelFleet ?? {};
     const modelWeights = input.modelWeights ?? current?.modelWeights ?? {};
     assertModelFleet(modelFleet);
     assertModelWeights(modelWeights);
+    const python = pythonPath(input.python, current?.python);
     const config = {
         provider: input.provider,
         queueLength: input.queueLength,
@@ -78,6 +90,7 @@ export async function setupWorkspace(input) {
         modelFleet,
         modelWeights,
         embeddingLimit: input.embeddingLimit ?? current?.embeddingLimit ?? 1,
+        ...(python === undefined ? {} : { python }),
     };
     const unchanged = current !== undefined && sameConfig(current, config);
     if (input.ownerAlive && current !== undefined && !unchanged) {
@@ -89,7 +102,7 @@ export async function setupWorkspace(input) {
                 `poddrill serve is running with provider ${current.provider},`,
                 `queue length ${current.queueLength}, fleet limit ${current.fleetLimit},`,
                 `and embedding limit ${current.embeddingLimit}.`,
-                "Stop it before changing the setup.",
+                "Stop it with poddrill stop before changing the setup.",
             ].join(" "),
         };
     }
@@ -181,6 +194,7 @@ function parseConfig(value) {
     }
     const fleetLimit = readFleetLimit(record);
     const embeddingLimit = optionalCount(record["embeddingLimit"]);
+    const python = readPython(record);
     if (fleetLimit === undefined || embeddingLimit === undefined) {
         return undefined;
     }
@@ -191,7 +205,18 @@ function parseConfig(value) {
         modelFleet: readModelFleet(record["modelFleet"]),
         modelWeights: readModelWeights(record["modelWeights"]),
         embeddingLimit,
+        ...(python === undefined ? {} : { python }),
     };
+}
+function readPython(record) {
+    if (!Object.prototype.hasOwnProperty.call(record, "python")) {
+        return undefined;
+    }
+    const python = record["python"];
+    if (typeof python !== "string" || !isAbsolute(python)) {
+        throw new Error(`python must be an absolute path, got ${String(python)}`);
+    }
+    return python;
 }
 /**
  * `fleetLimit` wins. An old file that only has `whistleLimit` uses that number.
@@ -275,7 +300,13 @@ function writtenConfig(config) {
         body["modelWeights"] = config.modelWeights;
     }
     body["embeddingLimit"] = config.embeddingLimit;
+    if (config.python !== undefined) {
+        body["python"] = config.python;
+    }
     return `${JSON.stringify(body, null, 2)}\n`;
+}
+function pythonPath(requested, current) {
+    return requested ?? current;
 }
 /** Absent reads as 1. Present and not a positive integer is `undefined`. */
 function optionalCount(value) {
@@ -289,6 +320,7 @@ function sameConfig(a, b) {
         a.queueLength === b.queueLength &&
         a.fleetLimit === b.fleetLimit &&
         a.embeddingLimit === b.embeddingLimit &&
+        a.python === b.python &&
         sameById(a.modelFleet, b.modelFleet) &&
         sameById(a.modelWeights, b.modelWeights));
 }

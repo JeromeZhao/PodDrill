@@ -1,5 +1,5 @@
 /**
- * One long-lived python3 process that answers one framed request at a time on stdin/stdout.
+ * One long-lived Python process that answers one framed request at a time on stdin/stdout.
  * Frame: 8-byte big-endian body length, then UTF-8 JSON.
  * Shared request: { "wavPath": string }. A Whistle request also sends "language".
  * Replies: { "kind": "ready", ... } once, then per request
@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 
 import { asRecord } from "./disk.ts";
 import type { WorkerEvents, WorkerLink } from "./fleet.ts";
+import { pythonFromEnv } from "./python-env.ts";
 
 const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const STDERR_TAIL_BYTES = 8 * 1024;
@@ -23,8 +24,12 @@ export interface WorkerFrame {
 export interface FramedWorker<R> {
   /** Names the worker in its own failure messages, for example `cactus-needle`. */
   readonly label: string;
-  /** Arguments to python3. A script built on `PYTHON_FRAMES`. */
+  /** Arguments to the interpreter. A script built on `PYTHON_FRAMES`. */
   readonly args: readonly string[];
+  /** Interpreter to spawn. Omitted uses `PODDRILL_PYTHON` or `python3`. */
+  readonly command?: string;
+  /** Replace a raw exit tail with a stable reason. Omitted keeps the tail. */
+  explainExit?(tail: string): string;
   /** The reason to refuse a ready frame, or `undefined` to accept it. */
   checkReady(ready: Readonly<Record<string, unknown>>): Promise<string | undefined>;
   /** Throws on a malformed result, which fails only that request. */
@@ -86,7 +91,8 @@ export function spawnFramedWorker<R, Q extends WorkerFrame = WorkerFrame>(
   events: WorkerEvents,
 ): WorkerLink<R, Q> {
   const label = worker.label;
-  const child = spawn("python3", [...worker.args], { stdio: ["pipe", "pipe", "pipe"] });
+  const command = worker.command ?? pythonFromEnv(process.env);
+  const child = spawn(command, [...worker.args], { stdio: ["pipe", "pipe", "pipe"] });
   let state: LinkState = "booting";
   let pending: PendingRequest<R> | undefined;
   let stdout = Buffer.alloc(0);
@@ -183,7 +189,8 @@ export function spawnFramedWorker<R, Q extends WorkerFrame = WorkerFrame>(
   });
   child.on("close", (code: number | null) => {
     const tail = stderrTail.toString("utf8").trim();
-    exitOnce(tail === "" ? `${label} exited with code ${code === null ? "null" : String(code)}` : tail);
+    const raw = tail === "" ? `${label} exited with code ${code === null ? "null" : String(code)}` : tail;
+    exitOnce(worker.explainExit === undefined ? raw : worker.explainExit(raw));
   });
 
   return {

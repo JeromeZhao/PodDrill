@@ -233,7 +233,7 @@ class Fleet<R, Q> implements WorkerPool<R, Q> {
 
   /**
    * A worker that died booting fails the oldest waiting request with its reason.
-   * Load failures are deterministic (no python3, a missing module, weights that do not load),
+   * Load failures are deterministic (no Python interpreter, a missing module, weights that do not load),
    * and failing one request per failed boot bounds the respawn loop by the upstream window.
    * A worker that died busy fails only its own request, which the link rejects.
    */

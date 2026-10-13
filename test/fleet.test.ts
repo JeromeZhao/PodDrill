@@ -442,7 +442,10 @@ describe("model pools", () => {
     );
     await flush();
     assert.equal(workers.length, 0);
-    assert.deepEqual(japanese.outcome, { kind: "error", message: "pip install moonshine-voice" });
+    assert.deepEqual(japanese.outcome, {
+      kind: "error",
+      message: "Install moonshine-voice into the PodDrill Python: \"$PODDRILL_PYTHON\" -m pip install moonshine-voice",
+    });
     const english = watch(
       host.transcribeSlice({ sliceIndex: 0, startMs: 0, wavPath: "/en.wav", language: "en" }),
     );

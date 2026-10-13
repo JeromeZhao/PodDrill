@@ -1,25 +1,55 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clientMain, workspaceSetupCollision } from "./client.js";
-import { asRecord, errorCode } from "./disk.js";
+import { asRecord, errorCode, pathExists } from "./disk.js";
+import { embedWeightsPath } from "./embed.js";
 import { isModelId } from "./models.js";
+import { nodeInstallMessage, nodeMeetsMinimum } from "./node-version.js";
 import { callOwner, ownerAlive, proxyMcp, render, serve } from "./owner.js";
-import { resolveWorkspace, setupWorkspace } from "./workspace.js";
+import { readPackageIdentity } from "./package-identity.js";
+import { installPython, resolvePython } from "./python-env.js";
+import { fetchEcapa } from "./weights.js";
+import { defaultWorkspacePath, resolveWorkspace, setupWorkspace } from "./workspace.js";
 const usage = [
     "usage: poddrill setup --provider <id> --queue-length <n> [--fleet-limit <n>] [--whistle-limit <n>]",
-    "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>]",
+    "[--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--embedding-limit <n>] [--python <path>]",
+    "| install-python | fetch-weights | bootstrap [--provider <id>] [--queue-length <n>]",
     "| start <path> [--language <code>] | episode <episodeId> | cues <episodeId> [--limit <n>] [--after <cueId>] [--group-id <id>] [--hosts]",
     "| label-groups <episodeId> <json> | start-summary <episodeId> | set-summary <episodeId> <summaryId> <json>",
-    "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId> | serve | mcp",
+    "| put-paragraph <episodeId> <summaryId> <json> | post-paragraph <episodeId> <summaryId> <json> | summary <episodeId> <summaryId> | audit <episodeId>",
+    "| serve | stop | mcp [--selftest] | --help | --version",
 ].join(" ");
 async function main() {
+    if (!nodeMeetsMinimum(process.versions.node)) {
+        await emit(render({ kind: "error", message: nodeInstallMessage(process.versions.node) }), 1);
+    }
     const command = process.argv[2];
     switch (command) {
+        case "--help":
+        case "-h":
+        case "help":
+            await emit(helpText(), 0);
+        case "--version":
+        case "-v":
+        case "version":
+            await emit(await versionText(), 0);
         case "setup":
             await runSetup(process.argv.slice(3));
+            return;
+        case "install-python":
+            await runInstallPython();
+            return;
+        case "fetch-weights":
+            await runFetchWeights();
+            return;
+        case "bootstrap":
+            await runBootstrap(process.argv.slice(3));
+            return;
+        case "stop":
+            await runStop();
             return;
         case "client": {
             const rendered = await clientMain(process.argv.slice(3), process.env, import.meta.url);
@@ -60,7 +90,7 @@ async function main() {
             await serve(await resolveWorkspace(process.env), false);
             return;
         case "mcp":
-            await runMcp();
+            await runMcp(process.argv.slice(3));
             return;
         default:
             await emit(render({ kind: "error", message: usage }), 1);
@@ -91,6 +121,7 @@ async function runSetup(args) {
     const fleetLimit = sharedLimit(fleetText, whistleText);
     const modelFleet = modelFleetFrom(fleetArgs);
     const modelWeights = modelWeightsFrom(weightArgs);
+    const python = await chosenPython(args);
     const root = await workspaceArg();
     const alive = await ownerAlive(root);
     const result = await setupWorkspace({
@@ -101,6 +132,7 @@ async function runSetup(args) {
         ...(modelFleet === undefined ? {} : { modelFleet }),
         ...(modelWeights === undefined ? {} : { modelWeights }),
         ...(embeddingText === undefined ? {} : { embeddingLimit: Number(embeddingText) }),
+        ...(python === undefined ? {} : { python }),
         ownerAlive: alive,
     });
     await emit(render(publicSetup(result)), result.kind === "ready" ? 0 : 1);
@@ -262,7 +294,65 @@ async function runEpisode(episodeId) {
     await ensureOwner(root);
     await emit(await callOwner(root, { op: "episode", episodeId }), 0);
 }
-async function runMcp() {
+async function runInstallPython() {
+    const installed = await installPython(process.env, import.meta.url);
+    await emit(render({ kind: "ready", ...installed }), 0);
+}
+async function runFetchWeights() {
+    const fetched = await fetchEcapa(embedWeightsPath(process.env));
+    await emit(render({ kind: "ready", ...fetched }), 0);
+}
+async function runBootstrap(args) {
+    const provider = flag(args, "--provider") ?? "localhost";
+    const queueText = flag(args, "--queue-length") ?? "4";
+    if (!isCountText(queueText) || flag(args, "--provider") === "") {
+        await emit(render({ kind: "error", message: usage }), 1);
+    }
+    const installed = await installPython(process.env, import.meta.url);
+    const weights = await fetchEcapa(embedWeightsPath(process.env));
+    const root = await workspaceArg();
+    const alive = await ownerAlive(root);
+    const result = await setupWorkspace({
+        root,
+        provider,
+        queueLength: Number(queueText),
+        python: installed.python,
+        ownerAlive: alive,
+    });
+    if (result.kind !== "ready") {
+        await emit(render(publicSetup(result)), 1);
+    }
+    await emit(render({
+        kind: "ready",
+        python: installed.python,
+        installer: installed.installer,
+        weights,
+        setup: publicSetup(result),
+    }), 0);
+}
+async function runStop() {
+    const root = await resolveWorkspace(process.env);
+    if (!(await ownerAlive(root))) {
+        await emit(render({ kind: "ready", state: "stopped" }), 0);
+    }
+    const text = await callOwner(root, { op: "stop" });
+    await emit(text, text.includes("\"kind\":\"error\"") ? 1 : 0);
+}
+async function runMcp(args) {
+    if (args.includes("--selftest")) {
+        const python = await resolvePython(process.env);
+        await emit(render({
+            kind: "ready",
+            execPath: process.execPath,
+            script: fileURLToPath(import.meta.url),
+            env: {
+                PATH: process.env["PATH"] ?? "",
+                PODDRILL_PYTHON: python,
+                PODDRILL_WORKSPACE: defaultWorkspacePath(process.env),
+                PODDRILL_EMBED_WEIGHTS: embedWeightsPath(process.env),
+            },
+        }), 0);
+    }
     const root = await resolveWorkspace(process.env);
     if (await ownerAlive(root)) {
         await proxyMcp(root);
@@ -296,6 +386,7 @@ function publicSetup(result) {
                 queueLength: result.report.config.queueLength,
                 fleetLimit: result.report.config.fleetLimit,
                 embeddingLimit: result.report.config.embeddingLimit,
+                ...(result.report.config.python === undefined ? {} : { python: result.report.config.python }),
             };
         case "rejected":
             return {
@@ -317,8 +408,7 @@ function isCountText(text) {
     return /^[1-9]\d*$/.test(text);
 }
 async function workspaceArg() {
-    const configured = process.env["PODDRILL_WORKSPACE"];
-    const candidate = resolve(configured === undefined || configured === "" ? process.cwd() : configured);
+    const candidate = defaultWorkspacePath(process.env);
     try {
         return await realpath(candidate);
     }
@@ -429,6 +519,68 @@ function splitPair(text) {
         return undefined;
     }
     return { left: text.slice(0, index), right: text.slice(index + 1) };
+}
+async function chosenPython(args) {
+    const flagged = flag(args, "--python");
+    const fromEnv = process.env["PODDRILL_PYTHON"];
+    const flaggedSet = flagged !== undefined && flagged !== "";
+    const envSet = fromEnv !== undefined && fromEnv !== "";
+    if (!flaggedSet && !envSet) {
+        return undefined;
+    }
+    if (flaggedSet && envSet && flagged !== fromEnv) {
+        await emit(render({ kind: "error", message: `python ${flagged} and PODDRILL_PYTHON ${fromEnv} differ` }), 1);
+    }
+    const chosen = flaggedSet ? flagged : fromEnv;
+    if (typeof chosen !== "string" || !isAbsolute(chosen)) {
+        await emit(render({ kind: "error", message: `python must be an absolute path, got ${String(chosen)}` }), 1);
+    }
+    if (typeof chosen !== "string" || !(await pathExists(chosen))) {
+        await emit(render({ kind: "error", message: `python interpreter not found at ${String(chosen)}` }), 1);
+    }
+    if (typeof chosen !== "string") {
+        await emit(render({ kind: "error", message: "python must be an absolute path" }), 1);
+    }
+    return chosen;
+}
+function helpText() {
+    const lines = [
+        "poddrill transcribes audio, groups voices, and stores a summary.",
+        "",
+        "Commands:",
+        "  setup --provider <id> --queue-length <n> [--fleet-limit <n>] [--embedding-limit <n>]",
+        "        [--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--python <path>]",
+        "  install-python     create ~/.cache/poddrill/venv and install pinned Python packages",
+        "  fetch-weights      download the pinned ECAPA file and check its sha256",
+        "  bootstrap [--provider <id>] [--queue-length <n>]",
+        "                     install-python, fetch-weights, then setup",
+        "  start <path> [--language <code>]",
+        "  episode <episodeId>",
+        "  cues <episodeId> [--limit <n>] [--after <cueId>] [--group-id <id>] [--hosts]",
+        "  label-groups <episodeId> <json>",
+        "  start-summary <episodeId>",
+        "  set-summary <episodeId> <summaryId> <json>",
+        "  put-paragraph <episodeId> <summaryId> <json>",
+        "  post-paragraph <episodeId> <summaryId> <json>",
+        "  summary <episodeId> <summaryId>",
+        "  audit <episodeId>",
+        "  serve",
+        "  stop               stop the running owner",
+        "  mcp [--selftest]",
+        "  client doctor|plan|apply",
+        "",
+        "  --help             show this text",
+        "  --version          print the package version",
+        "",
+        "Providers localhost, grok-bot, and cursor-cloud all run the local Python host on this computer.",
+        "Every command uses PODDRILL_WORKSPACE, or ~/poddrill when that variable is unset.",
+        "Python is PODDRILL_PYTHON, then the path stored by setup, then ~/.cache/poddrill/venv/bin/python, then python3.",
+    ];
+    return `${lines.join("\n")}\n`;
+}
+async function versionText() {
+    const identity = await readPackageIdentity(import.meta.url);
+    return `poddrill ${identity.version}\n`;
 }
 function delay(ms) {
     return new Promise((resolve) => {

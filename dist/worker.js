@@ -1,5 +1,5 @@
 /**
- * One long-lived python3 process that answers one framed request at a time on stdin/stdout.
+ * One long-lived Python process that answers one framed request at a time on stdin/stdout.
  * Frame: 8-byte big-endian body length, then UTF-8 JSON.
  * Shared request: { "wavPath": string }. A Whistle request also sends "language".
  * Replies: { "kind": "ready", ... } once, then per request
@@ -8,6 +8,7 @@
  */
 import { spawn } from "node:child_process";
 import { asRecord } from "./disk.js";
+import { pythonFromEnv } from "./python-env.js";
 const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const STDERR_TAIL_BYTES = 8 * 1024;
 /**
@@ -48,7 +49,8 @@ export const PYTHON_FRAMES = [
 ].join("\n");
 export function spawnFramedWorker(worker, events) {
     const label = worker.label;
-    const child = spawn("python3", [...worker.args], { stdio: ["pipe", "pipe", "pipe"] });
+    const command = worker.command ?? pythonFromEnv(process.env);
+    const child = spawn(command, [...worker.args], { stdio: ["pipe", "pipe", "pipe"] });
     let state = "booting";
     let pending;
     let stdout = Buffer.alloc(0);
@@ -139,7 +141,8 @@ export function spawnFramedWorker(worker, events) {
     });
     child.on("close", (code) => {
         const tail = stderrTail.toString("utf8").trim();
-        exitOnce(tail === "" ? `${label} exited with code ${code === null ? "null" : String(code)}` : tail);
+        const raw = tail === "" ? `${label} exited with code ${code === null ? "null" : String(code)}` : tail;
+        exitOnce(worker.explainExit === undefined ? raw : worker.explainExit(raw));
     });
     return {
         request(frame) {
