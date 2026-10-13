@@ -467,10 +467,34 @@ function parseRequest(value: unknown): OwnerRequest | undefined {
   if (op === "labelGroups" && typeof record["episodeId"] === "string") {
     return { op: "labelGroups", episodeId: record["episodeId"], groups: record["groups"] };
   }
-  if (typeof op === "string") {
-    return summaryRequest(op, record);
+  return socketSummary(record);
+}
+
+function socketSummary(record: Readonly<Record<string, unknown>>): SummaryOwnerRequest | undefined {
+  const op = record["op"];
+  const episodeId = record["episodeId"];
+  if (typeof episodeId !== "string") {
+    return undefined;
   }
-  return undefined;
+  if (op === "startSummary") {
+    return { op: "startSummary", episodeId };
+  }
+  const summaryId = record["summaryId"];
+  if (typeof summaryId !== "string") {
+    return undefined;
+  }
+  switch (op) {
+    case "setSummary":
+      return { op: "setSummary", episodeId, summaryId, summary: record["summary"] };
+    case "putParagraph":
+      return { op: "putParagraph", episodeId, summaryId, body: record["body"] };
+    case "postParagraph":
+      return { op: "postParagraph", episodeId, summaryId, body: record["body"] };
+    case "summary":
+      return { op: "summary", episodeId, summaryId };
+    default:
+      return undefined;
+  }
 }
 
 function summaryRequest(
