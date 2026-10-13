@@ -787,6 +787,7 @@ describe("JobQueue resume", () => {
       assert.deepEqual((await readdir(episodeDir(workspace.root, episodeId))).sort(), [
         "embedding",
         "episode.json",
+        "groups.json",
         "source.wav",
         "transcript",
       ]);

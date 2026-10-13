@@ -47,6 +47,7 @@ import {
   readStretchVectors,
   readVttCues,
   type CueRow,
+  type StretchVector,
   type CueText,
   type StoredLabel,
 } from "./groups.ts";
@@ -161,6 +162,11 @@ interface LoadedCues {
   readonly rows: readonly CueRow[];
   readonly labels: readonly StoredLabel[];
 }
+
+type StoredRows =
+  | { readonly kind: "rows"; readonly rows: readonly CueRow[] }
+  | { readonly kind: "missing-groups" }
+  | { readonly kind: "unreadable" };
 
 export type StartRejection = "outside-audio-dir" | "not-found" | "not-audio" | "unknown-language";
 
@@ -673,13 +679,23 @@ export class JobQueue {
       return { state: "not-ready", episodeId: id, on: "embedding" };
     }
     const layout = episodeLayout(this.root, id);
-    const rows = await readOrBuildRows(layout, this.stop.signal);
-    if (rows === undefined) {
+    const stored = await readStoredRows(layout);
+    if (stored.kind !== "rows") {
       if (this.stop.signal.aborted) {
         throw new Error("episode store is closed");
       }
-      return { kind: "error", message: "the transcript or embedding could not be read" };
+      if (stored.kind === "missing-groups") {
+        this.setArtifact(id, "embedding", { kind: "pending", done: 0, total: 0 });
+        this.wake("embedding");
+        return { state: "not-ready", episodeId: id, on: "embedding" };
+      }
+      if (stored.kind === "unreadable") {
+        return { kind: "error", message: "the transcript or embedding could not be read" };
+      }
+      const unreachable: never = stored;
+      throw new Error(`unexpected stored rows ${unreachable}`);
     }
+    const rows = stored.rows;
     const labels = await readStoredLabels(layout.labels);
     if (labels === undefined) {
       return { kind: "error", message: "labels.json could not be read" };
@@ -915,13 +931,35 @@ export class JobQueue {
   }
 
   private async embed(run: StageRun): Promise<boolean> {
+    const { layout, signal } = run;
+    const transcript = await readFile(layout.artifacts.transcript.output, "utf8");
+    const stretches = await this.ensureStretchVectors(run, transcript);
+    if (stretches === undefined) {
+      return false;
+    }
+    const assignments = assignCues(readVttCues(transcript), stretches);
+    return commitFile(layout.groups, signal, (temp) =>
+      writeFile(temp, `${JSON.stringify({ cues: assignments }, null, 2)}\n`),
+    );
+  }
+
+  private async ensureStretchVectors(
+    run: StageRun,
+    transcript: string,
+  ): Promise<readonly StretchVector[] | undefined> {
     const { entry, layout, signal } = run;
     const artifact = layout.artifacts.embedding;
+    if (await pathExists(artifact.output)) {
+      const stored = readStretchVectors(await readJsonFile(artifact.output));
+      if (stored === undefined) {
+        throw new Error(`could not read ${artifact.output}`);
+      }
+      run.report(stored.length, stored.length);
+      return stored;
+    }
     const source = join(layout.dir, entry.manifest.sourceFile);
     await this.hosts.embed.prepare();
-    const stretches = planStretches(
-      readCueSpans(await readFile(layout.artifacts.transcript.output, "utf8")),
-    );
+    const stretches = planStretches(readCueSpans(transcript));
     await mkdir(artifact.workDir, { recursive: true });
     const vectors = new Map<number, readonly number[]>();
     run.report(0, stretches.length);
@@ -938,7 +976,7 @@ export class JobQueue {
       return true;
     });
     if (!finished(outcome)) {
-      return false;
+      return undefined;
     }
     const body = {
       stretches: stretches.map((stretch) => {
@@ -949,7 +987,10 @@ export class JobQueue {
         return { startMs: stretch.startMs, endMs: stretch.endMs, vector };
       }),
     };
-    return commitFile(artifact.output, signal, (temp) => writeFile(temp, `${JSON.stringify(body)}\n`));
+    const wrote = await commitFile(artifact.output, signal, (temp) =>
+      writeFile(temp, `${JSON.stringify(body)}\n`),
+    );
+    return wrote ? body.stretches : undefined;
   }
 
   private async fail(
@@ -1218,16 +1259,23 @@ async function loadEpisode(root: WorkspaceRoot, id: EpisodeId): Promise<EpisodeE
     artifacts: {
       transcript: await readArtifact(layout.artifacts.transcript, slicesDone, plan.length),
       // Vectors live only in the output, so a restarted embedding counts from 0.
-      embedding: await readArtifact(layout.artifacts.embedding, 0, 0),
+      embedding: await readArtifact(layout.artifacts.embedding, 0, 0, layout.groups),
     },
   };
 }
 
-async function readArtifact(layout: ArtifactLayout, done: number, total: number): Promise<ArtifactProgress> {
-  if (await pathExists(layout.output)) {
+async function readArtifact(
+  layout: ArtifactLayout,
+  done: number,
+  total: number,
+  companion?: string,
+): Promise<ArtifactProgress> {
+  const outputReady = await pathExists(layout.output);
+  const companionReady = companion === undefined || (await pathExists(companion));
+  if (outputReady && companionReady) {
     return { kind: "ready" };
   }
-  if (await pathExists(layout.failed)) {
+  if (!outputReady && (await pathExists(layout.failed))) {
     const message = asRecord(await readJsonFile(layout.failed))?.["message"];
     return {
       kind: "failed",
@@ -1351,33 +1399,22 @@ function resolveLimit(
   return limit;
 }
 
-async function readOrBuildRows(
-  layout: EpisodeLayout,
-  signal: AbortSignal,
-): Promise<readonly CueRow[] | undefined> {
+async function readStoredRows(layout: EpisodeLayout): Promise<StoredRows> {
   let vtt: string;
   try {
     vtt = await readFile(layout.artifacts.transcript.output, "utf8");
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
-      return undefined;
+      return { kind: "unreadable" };
     }
     throw error;
   }
   const cues = readVttCues(vtt);
-  if (await pathExists(layout.groups)) {
-    const stored = readAssignments(await readJsonFile(layout.groups));
-    return stored === undefined ? undefined : cueRows(cues, stored);
+  if (!(await pathExists(layout.groups))) {
+    return { kind: "missing-groups" };
   }
-  const stretches = readStretchVectors(await readJsonFile(layout.artifacts.embedding.output));
-  if (stretches === undefined) {
-    return undefined;
-  }
-  const assignments = assignCues(cues, stretches);
-  const wrote = await commitFile(layout.groups, signal, (temp) =>
-    writeFile(temp, `${JSON.stringify({ cues: assignments }, null, 2)}\n`),
-  );
-  return wrote ? cueRows(cues, assignments) : undefined;
+  const stored = readAssignments(await readJsonFile(layout.groups));
+  return stored === undefined ? { kind: "unreadable" } : { kind: "rows", rows: cueRows(cues, stored) };
 }
 
 async function readStoredLabels(path: string): Promise<readonly StoredLabel[] | undefined> {

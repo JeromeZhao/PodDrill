@@ -99,6 +99,8 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
   let requestStop = (): void => {};
   // allowHalfOpen so a client FIN cannot drop the reply while start is still reading audio.
   const server = createServer({ allowHalfOpen: true }, (connection) => {
+    // socket.end to a client that already left emits EPIPE. Without a listener the process exits.
+    connection.on("error", () => undefined);
     const opened = queue;
     if (opened === undefined) {
       // Answer after the queue opens. A refused connect would let another owner unlink this socket.

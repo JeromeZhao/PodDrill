@@ -67,7 +67,7 @@ export interface ArtifactLayout {
 export interface EpisodeLayout {
   readonly dir: string;
   readonly manifest: string;
-  /** Speaker groups built from the embedding. Absent until the first cues read. */
+  /** Speaker groups. The embedding stage writes this after `embedding.json`. */
   readonly groups: string;
   /** Names and marks for those groups. Absent until a label write. */
   readonly labels: string;

@@ -723,6 +723,7 @@ describe("poddrill cli", () => {
       await writeFile(join(dir, "episode.json"), `${JSON.stringify(manifest, null, 2)}\n`);
       await writeFile(join(dir, "transcript", "transcript.vtt"), "WEBVTT\n");
       await writeFile(join(dir, "embedding", "embedding.json"), "{\"stretches\":[]}\n");
+      await writeFile(join(dir, "groups.json"), "{\"cues\":[]}\n");
       const read = await run(root, ["episode", episodeId]);
       assert.equal(read.code, 0, read.stderr);
       assert.equal(

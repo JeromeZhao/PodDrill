@@ -126,6 +126,15 @@ async function seed(
     },
     hooks,
   );
+  if (stretches !== undefined) {
+    const groupsPath = join(episodeDir, "groups.json");
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (await fileExists(groupsPath)) {
+        break;
+      }
+      await pause(10);
+    }
+  }
   return {
     id,
     dir: episodeDir,
@@ -200,13 +209,13 @@ describe("cues", () => {
     }));
     const seeded = await seed(vtt(cues), [{ startMs: 0, endMs: 30_000, vector: [1, 0] }]);
     try {
-      assert.equal(await fileExists(join(seeded.dir, "groups.json")), false);
+      assert.equal(await fileExists(join(seeded.dir, "groups.json")), true);
       assert.deepEqual(await seeded.queue.cues(seeded.id, { limit: 21 }), {
         kind: "rejected",
         reason: "limit",
         message: "limit must be an integer from 1 through 20",
       });
-      assert.equal(await fileExists(join(seeded.dir, "groups.json")), false);
+      assert.equal(await fileExists(join(seeded.dir, "groups.json")), true);
       const read = seeded.queue.episode(seeded.id);
       if (read.state !== "present") {
         throw new Error(JSON.stringify(read));

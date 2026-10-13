@@ -117,6 +117,7 @@ async function seed(transcriptReady: boolean): Promise<Seed> {
     await writeFile(join(episodeDir, "transcript", "transcript.vtt"), vtt(CUES));
     await mkdir(join(episodeDir, "embedding"), { recursive: true });
     await writeFile(join(episodeDir, "embedding", "embedding.json"), "{}\n");
+    await writeFile(join(episodeDir, "groups.json"), "{\"cues\":[]}\n");
   } else {
     await writeFile(
       join(episodeDir, "transcript", "failed.json"),
