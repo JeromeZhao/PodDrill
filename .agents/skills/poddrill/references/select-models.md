@@ -1,6 +1,6 @@
 # Set up Moonshine weights
 
-PodDrill does not download the Moonshine weights. Install the current moonshine-voice release into the PodDrill Python, download the model with word timestamps, then pass the returned directory to setup. The version is unpinned. On a PEP 668 Python, use the venv from `poddrill install-python`.
+Read this only when the episode language is `ja`, `ko`, or `zh`. Ask the user before you install moonshine-voice. PodDrill does not download the weights. After the user agrees, install the current moonshine-voice release into the PodDrill Python, download the model with word timestamps, then pass the returned directory to setup. The version is unpinned. On a PEP 668 Python, use the venv from `poddrill install-python`.
 
 Install the package first. `$PODDRILL_PYTHON` is the interpreter PodDrill spawns.
 

@@ -885,7 +885,7 @@ async function ytDlpCheck(env, python) {
     return {
         name: "yt-dlp",
         state: "optional",
-        detail: "yt-dlp is optional. Install the current release into the PodDrill Python, or use a standalone yt-dlp binary.",
+        detail: "Not required for setup.",
         fix: ytDlpFix(python),
     };
 }

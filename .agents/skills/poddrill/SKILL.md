@@ -25,9 +25,9 @@ Do this once on the computer that will transcribe. Each step is safe to repeat. 
 
 4. Run `poddrill fetch-weights`. This downloads `voxceleb_ECAPA512.onnx` from the pinned WeSpeaker commit, checks the byte size and SHA-256, and writes `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. A later run leaves a matching file in place.
 
-5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. `yt-dlp` is optional and does not fail the command. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
+5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. Skip a check whose `state` is `optional`. Do not install it. Do not mention it. Do not ask the user about it. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
 
-6. Run `poddrill setup --provider localhost --queue-length 4`. Without `PODDRILL_WORKSPACE`, setup and every other command use `~/poddrill`. For `ja`, `ko`, or `zh`, read the weights guide and pass `--model-weights` on that same command. `en`, `de`, `fr`, `es`, `it`, `nl`, and `pl` do not need Moonshine weights.
+6. Run `poddrill setup --provider localhost --queue-length 4`. Without `PODDRILL_WORKSPACE`, setup and every other command use `~/poddrill`. When the episode language is `ja`, `ko`, or `zh`, read the weights guide before this command. Ask the user before you install anything that guide names.
 
    `poddrill bootstrap --provider localhost --queue-length 4` runs steps 3, 4, and 6.
 
@@ -39,7 +39,7 @@ A later refresh of clients that already have an entry is `poddrill client plan -
 
 ## Python
 
-`PODDRILL_PYTHON` selects the interpreter. Pass `--python` or set `PODDRILL_PYTHON` on setup to store an absolute path in `poddrill.json`. Otherwise PodDrill uses `~/.cache/poddrill/venv/bin/python` when that file exists, then `python3`. Install yt-dlp and moonshine-voice into that same interpreter. The current yt-dlp and moonshine-voice releases are unpinned.
+`PODDRILL_PYTHON` selects the interpreter. Pass `--python` or set `PODDRILL_PYTHON` on setup to store an absolute path in `poddrill.json`. Otherwise PodDrill uses `~/.cache/poddrill/venv/bin/python` when that file exists, then `python3`.
 
 ## Stop
 

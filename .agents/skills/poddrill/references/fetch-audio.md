@@ -16,14 +16,14 @@ Run this script even when the installed copy is not inside a git repository. Do 
 
 ## yt-dlp
 
-If the feed has no audio URL, or the script does not get the file, install the current yt-dlp into the PodDrill Python and run that module. The version is unpinned. On a PEP 668 Python, install into the venv from `poddrill install-python`, or set `PODDRILL_PYTHON` to an interpreter that allows pip. A pipx install or a standalone yt-dlp binary also works. The printed line is the download path.
+Ask the user before you install yt-dlp. Do that only when the feed has no audio URL, or the script did not write the file. Then install the current yt-dlp into the PodDrill Python and run that module. The version is unpinned. On a PEP 668 Python, install into the venv from `poddrill install-python`, or set `PODDRILL_PYTHON` to an interpreter that allows pip. A pipx install or a standalone yt-dlp binary also works. The printed line is the download path.
 
 ```
 "$PODDRILL_PYTHON" -m pip install --upgrade yt-dlp
 "$PODDRILL_PYTHON" -m yt_dlp -x --no-playlist --print after_move:filepath -o "<directory>/download.%(ext)s" "<page-url>"
 ```
 
-`poddrill client doctor` reports yt-dlp as optional and prints that pip command when it is missing. Write `<directory>` outside this git repository. If that command does not get the audio, read [Usage and options](https://github.com/yt-dlp/yt-dlp#usage-and-options).
+Write `<directory>` outside this git repository. If that command does not get the audio, read [Usage and options](https://github.com/yt-dlp/yt-dlp#usage-and-options).
 
 ## Other audio
 
