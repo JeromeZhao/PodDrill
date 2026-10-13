@@ -1,16 +1,62 @@
 name: Publish
 
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm CLI that can sign in with GitHub
+        run: npm install -g npm@11.5.1
+      - name: Install runtime dependencies
+        run: npm install --omit=dev
+      - name: Bump version files
+        id: bump
+        run: |
+          version="$(node scripts/bump-version.mjs "${{ inputs.bump }}")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          test "$(node dist/cli.js --version)" = "poddrill ${version}"
+      - name: Commit and tag
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json README.md .agents/skills/poddrill/SKILL.md
+          git commit -m "release: ${version}"
+          git tag "v${version}"
+          git push origin HEAD:main
+          git push origin "v${version}"
+      - name: Publish
+        run: npm publish
+
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
