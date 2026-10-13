@@ -420,12 +420,22 @@ function nextSkillStep(view) {
     }
 }
 function skillStepBudget(view) {
-    // Stage, aside, and promote leave a marker and a prev that this first view cannot count.
-    return (view.partialNext.length +
+    const listed = view.partialNext.length +
         view.completeNext.length +
         view.prev.length +
-        view.orphanMarkers.length +
-        6);
+        view.orphanMarkers.length;
+    switch (view.live) {
+        case "match":
+            return listed;
+        case "absent":
+            return listed + (view.completeNext.length === 0 ? 1 : 0) + 2;
+        case "differ":
+            return listed + (view.completeNext.length === 0 ? 1 : 0) + 4;
+        default: {
+            const leftover = view.live;
+            throw new Error(`unexpected live ${String(leftover)}`);
+        }
+    }
 }
 function pathStaysInHome(home, candidate) {
     const root = normalize(home);

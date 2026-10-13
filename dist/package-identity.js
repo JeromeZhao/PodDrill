@@ -3,10 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { asRecord } from "./disk.js";
 const serverName = "poddrill";
-/**
- * `package.json` one directory above the running module.
- * A `files` list that omits the skill still returns, so the owner can boot from a checkout.
- */
+/** `package.json` one directory above the running module. */
 export async function readPackageIdentity(moduleUrl) {
     const root = dirname(dirname(fileURLToPath(moduleUrl)));
     const text = await readFile(join(root, "package.json"), "utf8");

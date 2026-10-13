@@ -669,14 +669,23 @@ function nextSkillStep(view: SkillView): SkillStep {
 }
 
 function skillStepBudget(view: SkillView): number {
-  // Stage, aside, and promote leave a marker and a prev that this first view cannot count.
-  return (
+  const listed =
     view.partialNext.length +
     view.completeNext.length +
     view.prev.length +
-    view.orphanMarkers.length +
-    6
-  );
+    view.orphanMarkers.length;
+  switch (view.live) {
+    case "match":
+      return listed;
+    case "absent":
+      return listed + (view.completeNext.length === 0 ? 1 : 0) + 2;
+    case "differ":
+      return listed + (view.completeNext.length === 0 ? 1 : 0) + 4;
+    default: {
+      const leftover: never = view.live;
+      throw new Error(`unexpected live ${String(leftover)}`);
+    }
+  }
 }
 
 function pathStaysInHome(home: string, candidate: string): boolean {

@@ -6,10 +6,8 @@ import { asRecord } from "./disk.ts";
 
 const serverName = "poddrill";
 
-/** `major.minor.patch`. Built only by `parsePackageVersion`. */
 type PackageVersion = `${bigint}.${bigint}.${bigint}`;
 
-/** `poddrill@<major.minor.patch>`. `@latest` and pre-release tags do not inhabit this type. */
 type PoddrillSpec = `${typeof serverName}@${PackageVersion}`;
 
 export interface PackageIdentity {
@@ -21,10 +19,7 @@ export interface PackageIdentity {
   readonly files: readonly string[];
 }
 
-/**
- * `package.json` one directory above the running module.
- * A `files` list that omits the skill still returns, so the owner can boot from a checkout.
- */
+/** `package.json` one directory above the running module. */
 export async function readPackageIdentity(moduleUrl: string): Promise<PackageIdentity> {
   const root = dirname(dirname(fileURLToPath(moduleUrl)));
   const text = await readFile(join(root, "package.json"), "utf8");
