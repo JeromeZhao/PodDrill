@@ -21,6 +21,7 @@ function expectedLauncher(home: string, options?: { readonly path?: string; read
       PODDRILL_WORKSPACE: join(home, "poddrill"),
       PODDRILL_EMBED_WEIGHTS:
         options?.weights ?? join(home, ".cache", "poddrill", "ecapa", "voxceleb_ECAPA512.onnx"),
+      PODDRILL_SEGMENTATION_WEIGHTS: join(home, ".cache", "poddrill", "segmentation", "segmentation.onnx"),
     },
   };
 }
@@ -239,6 +240,13 @@ describe("poddrill client", () => {
             state: "bad",
             path: weights,
             detail: "ECAPA weights are missing",
+            fix: "poddrill fetch-weights",
+          },
+          {
+            name: "segmentation",
+            state: "bad",
+            path: join(home, ".cache", "poddrill", "segmentation", "segmentation.onnx"),
+            detail: "segmentation weights are missing",
             fix: "poddrill fetch-weights",
           },
           {

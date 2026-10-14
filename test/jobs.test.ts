@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { openEmbedHost, type EmbedCall } from "../src/embed.ts";
+import { probeDurationMs } from "../src/audio.ts";
+import { openDiarizeHost, type DiarizeCall } from "../src/diarize.ts";
+import type { EmbedCall } from "../src/embed.ts";
 import { EpisodeTime, planSlices, projectSlices, type WhistleResult } from "../src/episode.ts";
 import { fleetSize, modelForLanguage } from "../src/models.ts";
 import { moonshineToWhistle } from "../src/moonshine.ts";
@@ -78,7 +80,6 @@ function hello(): WhistleResult {
   };
 }
 
-/** One cue per pair of seconds, each 4.9 s long and 1 s apart, so each cue is its own stretch. */
 function cues(starts: readonly number[]): WhistleResult {
   return {
     kind: "speech",
@@ -163,13 +164,30 @@ const instantEmbed: EmbedCall = {
   },
 };
 
+function clipDiarize(): DiarizeCall {
+  return {
+    async prepare(): Promise<void> {},
+    async diarize(sourcePath: string) {
+      const durationMs = await probeDurationMs(sourcePath);
+      if (durationMs === undefined || durationMs < 1) {
+        throw new Error("diarize fixture has no audio");
+      }
+      return {
+        turns: [{ startMs: 0, endMs: durationMs, speaker: 0 }],
+        centroids: [vector(1)],
+      };
+    },
+  };
+}
+
 function openQueue(
   workspace: Workspace,
   whistle: WhistleCall,
   embed: EmbedCall = instantEmbed,
   config: WorkspaceConfig = workspace.config,
+  diarize: DiarizeCall = clipDiarize(),
 ): Promise<JobQueue> {
-  return JobQueue.open(workspace.root, config, { whistle, embed });
+  return JobQueue.open(workspace.root, config, { whistle, embed, diarize });
 }
 
 function episodeDir(root: WorkspaceRoot, id: EpisodeId): string {
@@ -335,41 +353,6 @@ function gated(): Gated {
   };
 }
 
-interface GatedEmbed {
-  readonly embed: EmbedCall;
-  /** Keyed by stretch wav basename, for example `0000.wav`. */
-  readonly gates: Map<string, Gate<readonly number[]>>;
-  readonly wavs: Map<string, Buffer>;
-  readonly peak: () => number;
-}
-
-function gatedEmbed(): GatedEmbed {
-  const gates = new Map<string, Gate<readonly number[]>>();
-  const wavs = new Map<string, Buffer>();
-  let inFlight = 0;
-  let peak = 0;
-  return {
-    gates,
-    wavs,
-    peak: () => peak,
-    embed: {
-      async prepare(): Promise<void> {},
-      async embedStretch(wavPath): Promise<readonly number[]> {
-        inFlight += 1;
-        peak = Math.max(peak, inFlight);
-        wavs.set(basename(wavPath), await readFile(wavPath));
-        try {
-          return await new Promise<readonly number[]>((resolve, reject) => {
-            gates.set(basename(wavPath), { resolve, reject });
-          });
-        } finally {
-          inFlight -= 1;
-        }
-      },
-    },
-  };
-}
-
 function gate<K, T>(gates: ReadonlyMap<K, Gate<T>>, key: K): Gate<T> {
   const found = gates.get(key);
   if (found === undefined) {
@@ -475,10 +458,9 @@ describe("JobQueue", () => {
       }
       const vtt = await readFile(transcriptFile(workspace.root, id, "transcript.vtt"), "utf8");
       assert.equal(vtt, "WEBVTT\n\nc0001\n00:00:00.100 --> 00:00:00.400\nHello.\n");
-      assert.equal(
-        await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8"),
-        "{\"stretches\":[]}\n",
-      );
+      assert.deepEqual(JSON.parse(await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8")), {
+        turns: [{ startMs: 0, endMs: 1_000, speaker: 0 }],
+      });
       assert.equal(await fileExists(sliceFile(workspace.root, id, "0000.wav")), true);
       assert.equal(await fileExists(sliceFile(workspace.root, id, "0000.whistle.json")), true);
       const again = await reopened.start(wavPath);
@@ -793,11 +775,11 @@ describe("JobQueue resume", () => {
       ]);
       assert.deepEqual((await readdir(join(episodeDir(workspace.root, episodeId), "transcript"))).sort(), [
         "transcript.vtt",
+        "turns.json",
         "work",
       ]);
       assert.deepEqual((await readdir(join(episodeDir(workspace.root, episodeId), "embedding"))).sort(), [
         "embedding.json",
-        "work",
       ]);
       assert.deepEqual(await readFile(transcriptFile(workspace.root, episodeId, "transcript.vtt")), vtt);
     } finally {
@@ -898,141 +880,116 @@ describe("JobQueue resume", () => {
 });
 
 describe("JobQueue embedding", () => {
-  it("shows the transcript ready while the embedding is running", async () => {
+  it("copies the covering turn and names the cue group from its first cue", async () => {
     const workspace = await openWorkspace(2);
-    const fake = gatedEmbed();
-    const queue = await openQueue(workspace, { transcribeSlice: async () => cues([0]) }, fake.embed);
+    const queue = await openQueue(workspace, { transcribeSlice: async () => cues([0]) });
     try {
       const bytes = pcmWav(6_000, 20);
       const id = episodeIdFor(bytes);
       await writeFile(join(workspace.audioDir, "talk.wav"), bytes);
       await queue.start(join(workspace.audioDir, "talk.wav"));
-      await waitFor(() => fake.gates.size === 1);
-      assert.deepEqual(
-        queue.episode(id),
-        present(workspace, id, 6_000, transcriptReady(workspace, id), { state: "running", progress: 0 }),
-      );
-      gate(fake.gates, "0000.wav").resolve(vector(1));
       await waitFor(() => bothReady(queue, id));
-      assert.deepEqual(
-        JSON.parse(await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8")),
-        { stretches: [{ startMs: 100, endMs: 5_000, vector: vector(1) }] },
-      );
+      assert.deepEqual(JSON.parse(await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8")), {
+        turns: [{ startMs: 0, endMs: 6_000, speaker: 0 }],
+      });
+      assert.deepEqual(JSON.parse(await readFile(join(episodeDir(workspace.root, id), "groups.json"), "utf8")), {
+        cues: [{ id: "c0001", groupId: "gc0001", nearestGroupId: null, nearestCosine: null }],
+      });
     } finally {
       await queue.close();
       await workspace.cleanup();
     }
   });
 
-  it("keeps embeddingLimit stretches in flight and cuts each whole stretch", async () => {
-    const workspace = await openWorkspace(2, 1, 2);
-    const fake = gatedEmbed();
-    const queue = await openQueue(workspace, { transcribeSlice: async () => cues([0, 6, 12]) }, fake.embed);
-    try {
-      const bytes = pcmWav(20_000, 21);
-      const id = episodeIdFor(bytes);
-      await writeFile(join(workspace.audioDir, "talk.wav"), bytes);
-      await queue.start(join(workspace.audioDir, "talk.wav"));
-      await waitFor(() => fake.gates.size === 2);
-      await delay(50);
-      assert.deepEqual([...fake.gates.keys()].sort(), ["0000.wav", "0001.wav"]);
-      assert.equal(fake.peak(), 2);
-      assert.equal(fake.wavs.get("0000.wav")?.length, 44 + 4_900 * 32);
-
-      gate(fake.gates, "0001.wav").resolve(vector(1));
-      await waitFor(() => progressOf(queue.episode(id), "embedding") === 33);
-      await waitFor(() => fake.gates.has("0002.wav"));
-      assert.equal(fake.peak(), 2);
-      gate(fake.gates, "0000.wav").resolve(vector(0));
-      gate(fake.gates, "0002.wav").resolve(vector(2));
-      await waitFor(() => bothReady(queue, id));
-      assert.deepEqual(
-        JSON.parse(await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8")),
-        {
-          stretches: [
-            { startMs: 100, endMs: 5_000, vector: vector(0) },
-            { startMs: 6_100, endMs: 11_000, vector: vector(1) },
-            { startMs: 12_100, endMs: 17_000, vector: vector(2) },
-          ],
-        },
-      );
-      assert.deepEqual((await readdir(embeddingFile(workspace.root, id, "work"))).sort(), [
-        "0000.wav",
-        "0001.wav",
-        "0002.wav",
-      ]);
-      assert.equal(JSON.stringify(queue.episode(id)).includes("work"), false);
-    } finally {
-      await queue.close();
-      await workspace.cleanup();
-    }
-  });
-
-  it("fails only the embedding when the weights file is missing, and retries it past a full queue", async () => {
+  it("reuses a valid turns file when the transcript is started again", async () => {
     const workspace = await openWorkspace(1);
-    const weights = join(workspace.dir, "missing", "voxceleb_ECAPA512.onnx");
-    const host = openEmbedHost(1, weights);
-    let releaseHold = (): void => {};
-    const holdGate = new Promise<void>((resolve) => {
-      releaseHold = resolve;
-    });
+    let diarized = 0;
+    const diarize: DiarizeCall = {
+      async prepare(): Promise<void> {},
+      async diarize(sourcePath: string) {
+        diarized += 1;
+        const durationMs = await probeDurationMs(sourcePath);
+        if (durationMs === undefined || durationMs < 1) {
+          throw new Error("diarize fixture has no audio");
+        }
+        return {
+          turns: [{ startMs: 0, endMs: durationMs, speaker: 0 }],
+          centroids: [vector(1)],
+        };
+      },
+    };
     let calls = 0;
     const whistle: WhistleCall = {
       async transcribeSlice(): Promise<WhistleResult> {
         calls += 1;
-        if (calls > 1) {
-          await holdGate;
+        if (calls === 1) {
+          throw new Error("transcribe failed");
         }
-        return cues([0]);
+        return hello();
       },
     };
-    const queue = await openQueue(workspace, whistle, host);
+    const queue = await openQueue(workspace, whistle, instantEmbed, workspace.config, diarize);
     try {
-      const bytes = pcmWav(6_000, 22);
+      const bytes = pcmWav(1_000, 21);
       const id = episodeIdFor(bytes);
       const wavPath = join(workspace.audioDir, "talk.wav");
       await writeFile(wavPath, bytes);
       await queue.start(wavPath);
-      await waitFor(() => stateOf(queue.episode(id), "embedding") === "failed");
-      const message = `ECAPA weights are missing at ${weights}. Run poddrill fetch-weights or set PODDRILL_EMBED_WEIGHTS.`;
-      assert.deepEqual(
-        queue.episode(id),
-        present(workspace, id, 6_000, transcriptReady(workspace, id), { state: "failed", progress: 0, message }),
-      );
-      assert.equal(
-        readMessage(JSON.parse(await readFile(embeddingFile(workspace.root, id, "failed.json"), "utf8"))),
-        message,
-      );
-      assert.equal(
-        await readFile(transcriptFile(workspace.root, id, "transcript.vtt"), "utf8"),
-        "WEBVTT\n\nc0001\n00:00:00.100 --> 00:00:05.000\ntalk done.\n",
-      );
-
-      const otherBytes = pcmWav(6_000, 23);
-      await writeFile(join(workspace.audioDir, "other.wav"), otherBytes);
-      const other = await queue.start(join(workspace.audioDir, "other.wav"));
-      assert.equal(other.kind, "started");
-      await waitFor(() => calls === 2);
-      const retried = await queue.start(wavPath);
-      assert.deepEqual(retried, {
-        kind: "started",
-        created: false,
-        episode: present(workspace, id, 6_000, transcriptReady(workspace, id), { state: "running", progress: 0 }),
-      });
+      await waitFor(() => stateOf(queue.episode(id), "transcript") === "failed");
+      assert.equal(diarized, 1);
+      assert.equal(calls, 1);
+      const again = await queue.start(wavPath);
+      assert.equal(again.kind, "started");
+      await waitFor(() => bothReady(queue, id));
+      assert.equal(diarized, 1);
       assert.equal(calls, 2);
-      await waitFor(() => stateOf(queue.episode(id), "embedding") === "failed");
-      assert.equal(stateOf(queue.episode(id), "transcript"), "ready");
+      assert.deepEqual(JSON.parse(await readFile(embeddingFile(workspace.root, id, "embedding.json"), "utf8")), {
+        turns: [{ startMs: 0, endMs: 1_000, speaker: 0 }],
+      });
     } finally {
-      releaseHold();
+      await queue.close();
+      await workspace.cleanup();
+    }
+  });
+
+  it("fails the transcript when diarize weights are missing and does not transcribe", async () => {
+    const workspace = await openWorkspace(1);
+    const ecapa = join(workspace.dir, "missing", "voxceleb_ECAPA512.onnx");
+    const segmentation = join(workspace.dir, "missing", "segmentation.onnx");
+    const host = openDiarizeHost(ecapa, segmentation);
+    let calls = 0;
+    const whistle: WhistleCall = {
+      async transcribeSlice(): Promise<WhistleResult> {
+        calls += 1;
+        return hello();
+      },
+    };
+    const queue = await openQueue(workspace, whistle, instantEmbed, workspace.config, host);
+    try {
+      const bytes = pcmWav(1_000, 22);
+      const id = episodeIdFor(bytes);
+      await writeFile(join(workspace.audioDir, "talk.wav"), bytes);
+      await queue.start(join(workspace.audioDir, "talk.wav"));
+      await waitFor(() => stateOf(queue.episode(id), "transcript") === "failed");
+      const failed = queue.episode(id);
+      const transcript = failed.state === "present" ? failed.artifacts[0] : undefined;
+      if (transcript === undefined || transcript.state !== "failed") {
+        throw new Error(JSON.stringify(failed));
+      }
+      assert.equal(transcript.message.includes("poddrill fetch-weights"), true);
+      assert.equal(transcript.message.includes(ecapa), true);
+      assert.equal(calls, 0);
+      assert.equal(await fileExists(transcriptFile(workspace.root, id, "turns.json")), false);
+      assert.equal(stateOf(queue.episode(id), "embedding"), "waiting");
+    } finally {
       await queue.close();
       await host.close();
       await workspace.cleanup();
     }
   });
 
-  it("counts only transcripts against queueLength, so an episode that is only embedding does not block", async () => {
+  it("counts only transcripts against queueLength", async () => {
     const workspace = await openWorkspace(1);
-    const fake = gatedEmbed();
     let releaseHold = (): void => {};
     const holdGate = new Promise<void>((resolve) => {
       releaseHold = resolve;
@@ -1047,45 +1004,28 @@ describe("JobQueue embedding", () => {
         return cues([0]);
       },
     };
-    const queue = await openQueue(workspace, whistle, fake.embed);
+    const queue = await openQueue(workspace, whistle);
     try {
       const firstBytes = pcmWav(6_000, 24);
       const firstId = episodeIdFor(firstBytes);
       await writeFile(join(workspace.audioDir, "first.wav"), firstBytes);
       await queue.start(join(workspace.audioDir, "first.wav"));
-      await waitFor(() => fake.gates.size === 1);
+      await waitFor(() => bothReady(queue, firstId));
       assert.equal(queue.idle("transcript"), true);
-      assert.equal(queue.idle("embedding"), false);
+      assert.equal(queue.idle("embedding"), true);
 
       const secondBytes = pcmWav(6_000, 25);
       const secondId = episodeIdFor(secondBytes);
       await writeFile(join(workspace.audioDir, "second.wav"), secondBytes);
       const second = await queue.start(join(workspace.audioDir, "second.wav"));
-      assert.deepEqual(second, {
-        kind: "started",
-        created: true,
-        episode: present(workspace, secondId, 6_000, { state: "running", progress: 0 }, WAITING),
-      });
+      assert.equal(second.kind, "started");
+      await waitFor(() => calls === 2);
 
       await writeFile(join(workspace.audioDir, "third.wav"), pcmWav(6_000, 26));
       const third = await queue.start(join(workspace.audioDir, "third.wav"));
       assert.deepEqual(third, { kind: "full", queueLength: 1, unfinished: [secondId] });
-      assert.deepEqual(
-        queue.episode(firstId),
-        present(workspace, firstId, 6_000, transcriptReady(workspace, firstId), { state: "running", progress: 0 }),
-      );
-
-      releaseHold();
-      await waitFor(() => stateOf(queue.episode(secondId), "transcript") === "ready");
-      assert.deepEqual(
-        queue.episode(secondId),
-        present(workspace, secondId, 6_000, transcriptReady(workspace, secondId), {
-          state: "queued",
-          position: 1,
-          progress: 0,
-        }),
-      );
-      assert.equal(queue.idle("transcript"), true);
+      assert.equal(stateOf(queue.episode(firstId), "embedding"), "ready");
+      assert.equal(stateOf(queue.episode(secondId), "transcript"), "running");
     } finally {
       releaseHold();
       await queue.close();

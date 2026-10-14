@@ -9,6 +9,8 @@ import {
   type SliceRecord,
   type WhistleSpeech,
 } from "../src/episode.ts";
+import { planRegions } from "../src/regions.ts";
+import type { Turn } from "../src/turns.ts";
 import { openWhistleCall, providerIds, providerTransport, refuseUnwiredTransport } from "../src/provider.ts";
 import { selectProvider } from "../src/transcribe.ts";
 
@@ -185,6 +187,50 @@ describe("providers", () => {
     assert.throws(() => openWhistleCall("localhost", { fleetLimit: 0, modelFleet: {}, modelWeights: {} }), {
       message: "fleet limit must be a positive integer, got 0",
     });
+  });
+});
+
+function turn(startMs: number, endMs: number, speaker: number): Turn {
+  return { startMs, endMs, speaker };
+}
+
+function windows(turns: readonly Turn[]): readonly (readonly number[])[] {
+  return planRegions(turns).map((slice) => [slice.startMs, slice.endMs, slice.keepStartMs, slice.keepEndMs]);
+}
+
+describe("planRegions", () => {
+  it("joins the same speaker across a 500 ms gap and keeps a 501 ms gap", () => {
+    assert.deepEqual(windows([turn(0, 1_000, 0), turn(1_500, 2_500, 0)]), [[0, 2_500, 0, 2_500]]);
+    assert.deepEqual(windows([turn(0, 1_000, 0), turn(1_501, 2_500, 0)]), [
+      [0, 1_000, 0, 1_000],
+      [1_501, 2_500, 1_501, 2_500],
+    ]);
+  });
+
+  it("folds a short turn into the previous region, then the next, and otherwise keeps it", () => {
+    assert.deepEqual(windows([turn(0, 1_000, 0), turn(1_500, 1_800, 1)]), [[0, 1_800, 0, 1_800]]);
+    assert.deepEqual(windows([turn(0, 1_000, 0), turn(1_600, 1_900, 1), turn(2_400, 4_000, 0)]), [
+      [0, 1_000, 0, 1_000],
+      [1_600, 4_000, 1_600, 4_000],
+    ]);
+    assert.deepEqual(windows([turn(0, 1_000, 0), turn(1_600, 1_900, 1), turn(2_500, 4_000, 0)]), [
+      [0, 1_000, 0, 1_000],
+      [1_600, 1_900, 1_600, 1_900],
+      [2_500, 4_000, 2_500, 4_000],
+    ]);
+  });
+
+  it("splits a region longer than one slice on the overlap grid, clipped to the region", () => {
+    assert.deepEqual(windows([turn(0, SLICE_MS, 0)]), [[0, SLICE_MS, 0, SLICE_MS]]);
+    assert.deepEqual(windows([turn(1_000, 1_000 + SLICE_MS + 1, 0)]), [
+      [1_000, 29_000, 1_000, 28_000],
+      [28_000, 29_001, 28_000, 29_001],
+    ]);
+    assert.deepEqual(windows([turn(1_000, 61_000, 0)]), [
+      [1_000, 29_000, 1_000, 28_000],
+      [28_000, 56_000, 28_000, 55_000],
+      [55_000, 61_000, 55_000, 61_000],
+    ]);
   });
 });
 

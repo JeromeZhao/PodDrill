@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { appendAudit, auditRecord, readAudit } from "./audit.ts";
 import { errorCode } from "./disk.ts";
 import { IDLE_FLEET_MS, watchIdleFleet } from "./idle-fleet.ts";
+import { openDiarizeHost, segmentationWeightsPath, type DiarizeHost } from "./diarize.ts";
 import { embedWeightsPath, openEmbedHost, type EmbedHost } from "./embed.ts";
 import { readPackageIdentity } from "./package-identity.ts";
 import { JobQueue } from "./jobs.ts";
@@ -47,6 +48,7 @@ type OwnerRequest =
 interface OwnerHosts {
   readonly whistle: WhistleHost;
   readonly embed: EmbedHost;
+  readonly diarize: DiarizeHost;
 }
 
 type ToolCall = (name: string, args: Readonly<Record<string, unknown>>) => Promise<string>;
@@ -131,6 +133,7 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
       modelWeights: config.modelWeights,
     }),
     embed: openEmbedHost(config.embeddingLimit, embedWeightsPath(process.env)),
+    diarize: openDiarizeHost(embedWeightsPath(process.env), segmentationWeightsPath(process.env)),
   };
   let opened: JobQueue;
   try {
@@ -143,7 +146,11 @@ export async function serve(root: WorkspaceRoot, mcpOnStdio: boolean): Promise<v
   const watchers = [
     watchIdleFleet({
       idle: () => opened.idle("transcript"),
-      release: () => hosts.whistle.release(),
+      release: () => {
+        const whistleParked = hosts.whistle.release();
+        const diarizeParked = hosts.diarize.release();
+        return whistleParked && diarizeParked;
+      },
       delayMs: IDLE_FLEET_MS,
       pollMs: 1_000,
     }),
@@ -659,6 +666,7 @@ async function closeOwner(
 async function closeHosts(hosts: OwnerHosts): Promise<void> {
   await hosts.whistle.close();
   await hosts.embed.close();
+  await hosts.diarize.close();
 }
 
 function closeIdle(server: ReturnType<typeof createServer>): Promise<void> {

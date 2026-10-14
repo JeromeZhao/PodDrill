@@ -38,7 +38,9 @@ The computer that runs PodDrill needs:
 - Node.js 20.19 or newer. Install the `.tar.gz` archive from `https://nodejs.org/dist/v20.19.0/`, or run `npx -y node@20.19.0`. The published CLI is plain JavaScript. The tests in this repository use `node --experimental-strip-types` and need a newer Node.
 - `ffmpeg` on `PATH`.
 - A Python interpreter with cactus-needle 3.2.0, numpy 2.5.4, and onnxruntime 1.31.0. The npm package named cactus-needle is a different package. `poddrill install-python` creates `~/.cache/poddrill/venv` and installs those pins. It uses `uv` when `uv` is on PATH, and otherwise `python3 -m venv`. `PODDRILL_PYTHON` selects another absolute interpreter, and setup stores that path in `poddrill.json`.
-- The ECAPA weights file. `poddrill fetch-weights` downloads `voxceleb_ECAPA512.onnx` from the pinned WeSpeaker commit, checks its size and SHA-256, and writes `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. `PODDRILL_EMBED_WEIGHTS` selects another path. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0.
+- The ECAPA and segmentation weight files. `poddrill fetch-weights` downloads `voxceleb_ECAPA512.onnx` and `segmentation.onnx`, checks each size and SHA-256, and writes them under `~/.cache/poddrill/ecapa/` and `~/.cache/poddrill/segmentation/`. `PODDRILL_EMBED_WEIGHTS` and `PODDRILL_SEGMENTATION_WEIGHTS` select other paths.
+
+The transcript job diarizes the episode, then transcribes it. The embedding job runs after the transcript is ready.
 
 `poddrill client doctor` prints a `fix` command for every check that is not ok. `poddrill bootstrap` runs `install-python`, `fetch-weights`, and `setup`.
 
@@ -50,10 +52,10 @@ Grok Bot cannot write its server entry. It prints the custom server to add: the 
 
 `npm test` runs the unit tests. Those tests use `node --experimental-strip-types`.
 
-`npm run test:smoke` runs a clean-home install, downloads the ECAPA file, and transcribes a short generated clip through `dist/cli.js`. It needs `python3` with `ensurepip`, `ffmpeg`, and `espeak-ng`. If one of those is missing, the test skips and names the missing tool. Run `npm run test:smoke` on a computer that has those tools. Build `dist/` with `npm run build` first.
+`npm run test:smoke` runs a clean-home install, downloads the ECAPA and segmentation files, and transcribes a short generated clip through `dist/cli.js`. It needs `python3` with `ensurepip`, `ffmpeg`, and `espeak-ng`. If one of those is missing, the test skips and names the missing tool. Run `npm run test:smoke` on a computer that has those tools. Build `dist/` with `npm run build` first.
 
 ## License
 
 MIT License. Copyright 2026 Jianyu Zhao.
 
-The ECAPA weights are separate from this license. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0.
+The ECAPA weights are separate from this license. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. The segmentation weights are separate from this license. pyannote segmentation-3.0 is MIT.

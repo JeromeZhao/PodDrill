@@ -23,7 +23,7 @@ Do this once on the computer that will transcribe. Each step is safe to repeat. 
 
 3. Run `poddrill install-python`. This creates `~/.cache/poddrill/venv` and installs cactus-needle 3.2.0, numpy 2.5.4, and onnxruntime 1.31.0. It uses `uv` when `uv` is on PATH, and otherwise `python3 -m venv`. The npm package named cactus-needle is a different package.
 
-4. Run `poddrill fetch-weights`. This downloads `voxceleb_ECAPA512.onnx` from the pinned WeSpeaker commit, checks the byte size and SHA-256, and writes `~/.cache/poddrill/ecapa/voxceleb_ECAPA512.onnx`. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. A later run leaves a matching file in place.
+4. Run `poddrill fetch-weights`. This downloads `voxceleb_ECAPA512.onnx` and `segmentation.onnx`, checks each byte size and SHA-256, and writes them under `~/.cache/poddrill/ecapa/` and `~/.cache/poddrill/segmentation/`. A later run leaves a matching file in place.
 
 5. Run `poddrill client doctor --client cursor --json`. Use `grok_build` or `grok_bot` in place of `cursor` when that is the client. For every check whose `state` is `bad`, run the `fix` command on that check, then run doctor again. Skip a check whose `state` is `optional`. Do not install it. Do not mention it. Do not ask the user about it. `workspace` stays `pending` until setup. Stop this loop when doctor exits 0, or when the only `bad` check is `link`.
 
@@ -73,7 +73,7 @@ Write the WAV at `<workspace>/audio/<file>.wav`. `poddrill start` resolves the p
 
 Pass `--language <code>` on `poddrill start` when the episode is not English. The code is `en`, `de`, `fr`, `es`, `it`, `nl`, `pl`, `ja`, `ko`, or `zh`.
 
-`poddrill start` returns before the transcript exists. Poll `poddrill episode <id>` until the transcript artifact `state` is `ready` or `failed`. The id is `ep_` plus the first 16 hex characters of the sha256 of the file bytes.
+`poddrill start` returns before the transcript exists. The transcript job diarizes the episode, then transcribes it. Poll `poddrill episode <id>` until the transcript artifact `state` is `ready` or `failed`. The id is `ep_` plus the first 16 hex characters of the sha256 of the file bytes.
 
 The transcript is done when that `state` is `ready`. Exit 0 does not mean the transcript is done. If the transcript or the embedding is missing or `failed`, pass the same WAV to `poddrill start` again. The episode id does not change. `created` is false, and the failed artifact runs again.
 

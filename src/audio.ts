@@ -8,7 +8,6 @@ import { open, writeFile, type FileHandle } from "node:fs/promises";
 
 import { SLICE_MS, type PlannedSlice } from "./episode.ts";
 
-/** A slice or a stretch. Never longer than `SLICE_MS`. */
 export type CutSpan = Pick<PlannedSlice, "index" | "startMs" | "endMs">;
 
 /** Whistle's input rate. The copy path cannot resample. */

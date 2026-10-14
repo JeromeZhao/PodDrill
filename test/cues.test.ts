@@ -76,9 +76,14 @@ async function pause(ms: number): Promise<void> {
   });
 }
 
+interface SeedTracks {
+  readonly turns: readonly { readonly startMs: number; readonly endMs: number; readonly speaker: number }[];
+  readonly centroids: readonly (readonly number[])[];
+}
+
 async function seed(
   transcript: string,
-  stretches: readonly { readonly startMs: number; readonly endMs: number; readonly vector: readonly number[] }[] | undefined,
+  tracks: SeedTracks | undefined,
   hooks?: { readonly afterLabelRead?: () => Promise<void> },
 ): Promise<Seed> {
   const dir = await mkdtemp(join(tmpdir(), "poddrill-cues-"));
@@ -106,10 +111,10 @@ async function seed(
   };
   await writeFile(join(episodeDir, "episode.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(join(episodeDir, "transcript", "transcript.vtt"), transcript);
-  if (stretches !== undefined) {
+  if (tracks !== undefined) {
     await writeFile(
-      join(episodeDir, "embedding", "embedding.json"),
-      `${JSON.stringify({ stretches }, null, 2)}\n`,
+      join(episodeDir, "transcript", "turns.json"),
+      `${JSON.stringify(tracks, null, 2)}\n`,
     );
   }
   const queue = await JobQueue.open(
@@ -123,10 +128,14 @@ async function seed(
         prepare: () => Promise.resolve(),
         embedStretch: () => Promise.reject(new Error("embed should not run")),
       },
+      diarize: {
+        prepare: () => Promise.resolve(),
+        diarize: () => Promise.reject(new Error("diarize should not run")),
+      },
     },
     hooks,
   );
-  if (stretches !== undefined) {
+  if (tracks !== undefined) {
     const groupsPath = join(episodeDir, "groups.json");
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (await fileExists(groupsPath)) {
@@ -207,7 +216,10 @@ describe("cues", () => {
       endMs: index * 1_000 + 100,
       text: `line ${index + 1}`,
     }));
-    const seeded = await seed(vtt(cues), [{ startMs: 0, endMs: 30_000, vector: [1, 0] }]);
+    const seeded = await seed(vtt(cues), {
+      turns: [{ startMs: 0, endMs: 30_000, speaker: 0 }],
+      centroids: [[1, 0]],
+    });
     try {
       assert.equal(await fileExists(join(seeded.dir, "groups.json")), true);
       assert.deepEqual(await seeded.queue.cues(seeded.id, { limit: 21 }), {
@@ -262,17 +274,22 @@ describe("cues", () => {
     }
   });
 
-  it("keeps the group id of a merge just under 0.6 when the page size changes", async () => {
+  it("keeps the stored group id when the page size changes", async () => {
     const transcript = vtt([
       { id: "c0001", startMs: 1_000, endMs: 5_000, text: "near" },
       { id: "c0002", startMs: 7_000, endMs: 12_000, text: "also" },
       { id: "c0003", startMs: 14_000, endMs: 19_000, text: "far" },
     ]);
-    const seeded = await seed(transcript, [
-      { startMs: 1_000, endMs: 6_000, vector: [1000, 0] },
-      { startMs: 7_000, endMs: 13_000, vector: [599, 801] },
-      { startMs: 14_000, endMs: 20_000, vector: [-1000, 0] },
-    ]);
+    const seeded = await seed(transcript, {
+      turns: [
+        { startMs: 1_000, endMs: 13_000, speaker: 0 },
+        { startMs: 14_000, endMs: 20_000, speaker: 1 },
+      ],
+      centroids: [
+        [1, 0],
+        [-1, 0],
+      ],
+    });
     try {
       const narrow = presentCues(await seeded.queue.cues(seeded.id, { limit: 1 }));
       const wide = presentCues(await seeded.queue.cues(seeded.id, { limit: 8 }));
@@ -304,7 +321,7 @@ describe("cues", () => {
           text: "also",
           groupId: "gc0001",
           nearestGroupId: "gc0003",
-          nearestCosine: -0.5988796372881421,
+          nearestCosine: -1,
         },
         {
           id: "c0003",
@@ -313,7 +330,7 @@ describe("cues", () => {
           text: "far",
           groupId: "gc0003",
           nearestGroupId: "gc0001",
-          nearestCosine: -0.8940914453408111,
+          nearestCosine: -1,
         },
       ]);
       const groupsPath = join(seeded.dir, "groups.json");
@@ -335,11 +352,16 @@ describe("cues", () => {
       { id: "c0003", startMs: 15_000, endMs: 20_000, text: "three" },
       { id: "c0004", startMs: 30_000, endMs: 31_000, text: "yeah" },
     ]);
-    const seeded = await seed(transcript, [
-      { startMs: 1_000, endMs: 6_000, vector: [1, 0] },
-      { startMs: 8_000, endMs: 13_000, vector: [1, 0] },
-      { startMs: 15_000, endMs: 20_000, vector: [0, 1] },
-    ]);
+    const seeded = await seed(transcript, {
+      turns: [
+        { startMs: 1_000, endMs: 13_000, speaker: 0 },
+        { startMs: 15_000, endMs: 20_000, speaker: 1 },
+      ],
+      centroids: [
+        [1, 0],
+        [0, 1],
+      ],
+    });
     try {
       const page = presentCues(await seeded.queue.cues(seeded.id, { limit: 8 }));
       assert.deepEqual(page.cues, [
@@ -464,11 +486,16 @@ describe("cues", () => {
     });
     const seeded = await seed(
       transcript,
-      [
-        { startMs: 1_000, endMs: 6_000, vector: [1, 0] },
-        { startMs: 8_000, endMs: 13_000, vector: [1, 0] },
-        { startMs: 15_000, endMs: 20_000, vector: [0, 1] },
-      ],
+      {
+        turns: [
+          { startMs: 1_000, endMs: 13_000, speaker: 0 },
+          { startMs: 15_000, endMs: 20_000, speaker: 1 },
+        ],
+        centroids: [
+          [1, 0],
+          [0, 1],
+        ],
+      },
       {
         afterLabelRead: async () => {
           reads += 1;

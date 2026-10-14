@@ -104,7 +104,6 @@ function run(env: NodeJS.ProcessEnv, args: readonly string[], timeoutMs: number)
   });
 }
 
-/** Long enough that the cues join past the 4 second stretch minimum and the embedding host runs. */
 const SPEECH =
   "This is a generated speaker test for PodDrill. The voice stays on long enough to build one embedding stretch from the transcript cues. PodDrill stores the timed text and a speaker vector for this clip.";
 
@@ -217,11 +216,17 @@ describe("smoke", () => {
       assert.ok(installer === "uv" || installer === "venv" || installer === "cached");
 
       const weights = parseJson(await run(env, ["fetch-weights"], 180_000));
-      assert.equal(booleanField(weights, "created"), true);
-      assert.equal(stringField(weights, "sha256"), "f901ae3571912bad4e11e157744cb8b7d77a0b46923b83c410bdbb6c77d69736");
-      assert.equal(stringField(weights, "license"), "CC BY 4.0");
+      const ecapa = objectRecord(weights["ecapa"]);
+      const segmentation = objectRecord(weights["segmentation"]);
+      assert.equal(booleanField(ecapa, "created"), true);
+      assert.equal(stringField(ecapa, "sha256"), "f901ae3571912bad4e11e157744cb8b7d77a0b46923b83c410bdbb6c77d69736");
+      assert.equal(stringField(ecapa, "license"), "CC BY 4.0");
+      assert.equal(booleanField(segmentation, "created"), true);
+      assert.equal(stringField(segmentation, "sha256"), "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25");
+      assert.equal(stringField(segmentation, "license"), "MIT");
       const again = parseJson(await run(env, ["fetch-weights"], 60_000));
-      assert.equal(booleanField(again, "created"), false);
+      assert.equal(booleanField(objectRecord(again["ecapa"]), "created"), false);
+      assert.equal(booleanField(objectRecord(again["segmentation"]), "created"), false);
 
       const setup = parseJson(await run(env, ["setup", "--provider", "grok-bot", "--queue-length", "1"], 30_000));
       assert.equal(stringField(setup, "kind"), "ready");
@@ -262,13 +267,13 @@ describe("smoke", () => {
       const vtt = await readFile(transcriptPath, "utf8");
       assert.match(vtt, /-->/);
       const embeddingFile = objectRecord(parsed(await readFile(embeddingPath, "utf8")));
-      const stretches = embeddingFile["stretches"];
-      if (!Array.isArray(stretches) || stretches.length < 1) {
-        throw new Error(`embedding has no stretch: ${await readFile(embeddingPath, "utf8")}`);
+      const turns = embeddingFile["turns"];
+      if (!Array.isArray(turns) || turns.length < 1) {
+        throw new Error(`embedding has no turn: ${await readFile(embeddingPath, "utf8")}`);
       }
-      const vector = objectRecord(stretches[0])["vector"];
-      if (!Array.isArray(vector) || vector.length !== 192) {
-        throw new Error("embedding stretch vector is not 192 numbers");
+      const turn = objectRecord(turns[0]);
+      if (typeof turn["speaker"] !== "number" || typeof turn["startMs"] !== "number" || typeof turn["endMs"] !== "number") {
+        throw new Error("embedding turn is missing startMs, endMs, or speaker");
       }
 
       const stopped = parseJson(await run(env, ["stop"], 30_000));
