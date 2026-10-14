@@ -38,7 +38,7 @@ The computer that runs PodDrill needs:
 - Node.js 20.19 or newer. Install the `.tar.gz` archive from `https://nodejs.org/dist/v20.19.0/`, or run `npx -y node@20.19.0`. The published CLI is plain JavaScript. The tests in this repository use `node --experimental-strip-types` and need a newer Node.
 - `ffmpeg` on `PATH`.
 - A Python interpreter with cactus-needle 3.2.0, numpy 2.5.4, and onnxruntime 1.31.0. The npm package named cactus-needle is a different package. `poddrill install-python` creates `~/.cache/poddrill/venv` and installs those pins. It uses `uv` when `uv` is on PATH, and otherwise `python3 -m venv`. `PODDRILL_PYTHON` selects another absolute interpreter, and setup stores that path in `poddrill.json`.
-- The ECAPA and segmentation weight files. `poddrill fetch-weights` downloads `voxceleb_ECAPA512.onnx` and `segmentation.onnx`, checks each size and SHA-256, and writes them under `~/.cache/poddrill/ecapa/` and `~/.cache/poddrill/segmentation/`. `PODDRILL_EMBED_WEIGHTS` and `PODDRILL_SEGMENTATION_WEIGHTS` select other paths. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. pyannote segmentation-3.0 powerset model. MIT license.
+- The ECAPA and segmentation weight files. `poddrill fetch-weights` downloads `voxceleb_ECAPA512.onnx` and `segmentation.onnx`, checks each size and SHA-256, and writes them under `~/.cache/poddrill/ecapa/` and `~/.cache/poddrill/segmentation/`. `PODDRILL_EMBED_WEIGHTS` and `PODDRILL_SEGMENTATION_WEIGHTS` select other paths.
 
 The transcript job diarizes the episode, then transcribes it. The embedding job runs after the transcript is ready.
 
@@ -58,4 +58,4 @@ Grok Bot cannot write its server entry. It prints the custom server to add: the 
 
 MIT License. Copyright 2026 Jianyu Zhao.
 
-The ECAPA weights are separate from this license. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0.
+The ECAPA weights are separate from this license. WeSpeaker ECAPA-TDNN512 pretrained on VoxCeleb. VoxCeleb is used under CC BY 4.0. The segmentation weights are separate from this license. pyannote segmentation-3.0 is MIT.
