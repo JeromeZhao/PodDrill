@@ -1,6 +1,6 @@
 {
   "name": "poddrill",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Transcribe episode audio into timed text, group the voices, and store a summary.",
   "license": "MIT",
   "author": "Jianyu Zhao",
