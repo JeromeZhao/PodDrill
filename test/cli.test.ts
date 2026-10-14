@@ -11,7 +11,6 @@ import { socketPath } from "../src/owner.ts";
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const sampleRate = 16_000;
-const macFailure = "cactus-needle is not installed. Run poddrill install-python.";
 
 interface RunResult {
   readonly code: number;
@@ -177,10 +176,15 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value));
 }
 
-async function episodeUntil(root: string, episodeId: string, state: string): Promise<string> {
+async function episodeUntil(
+  root: string,
+  episodeId: string,
+  state: string,
+  extra: NodeJS.ProcessEnv = {},
+): Promise<string> {
   let last = "";
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const result = await run(root, ["episode", episodeId]);
+    const result = await run(root, ["episode", episodeId], extra);
     last = result.stdout;
     assert.equal(result.code, 0, result.stderr);
     if (result.stdout.includes(`"state":"${state}"`)) {
@@ -306,10 +310,11 @@ function mcpInitialize(root: string): Promise<string> {
 function mcpTools(
   root: string,
   calls: readonly { readonly id: number; readonly name: string; readonly args: object }[],
+  extra: NodeJS.ProcessEnv = {},
 ): Promise<ReadonlyMap<number, string>> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--experimental-strip-types", cliPath, "mcp"], {
-      env: envFor(root),
+      env: { ...envFor(root), ...extra },
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout = child.stdout;
@@ -647,7 +652,13 @@ describe("poddrill cli", () => {
         artifacts: [{ artifact: "transcript", state: "running", progress: 0 }, waiting],
         summaries: [],
       };
-      const started = await run(root, ["start", "audio/clip.wav"]);
+      const ecapa = join(root, "missing-ecapa.onnx");
+      const segmentation = join(root, "missing-segmentation.onnx");
+      const weightEnv = {
+        PODDRILL_EMBED_WEIGHTS: ecapa,
+        PODDRILL_SEGMENTATION_WEIGHTS: segmentation,
+      };
+      const started = await run(root, ["start", "audio/clip.wav"], weightEnv);
       assert.equal(started.code, 0, started.stderr);
       assert.equal(started.stdout, line({ kind: "started", created: true, episode: runningEpisode }));
       for (const hidden of ["wavPath", "whistlePath", "slicesDone", "slicesTotal", "work", "jobId"]) {
@@ -661,18 +672,23 @@ describe("poddrill cli", () => {
         durationMs: 1000,
         language: "en",
         artifacts: [
-          { artifact: "transcript", state: "failed", progress: 0, message: macFailure },
+          {
+            artifact: "transcript",
+            state: "failed",
+            progress: 0,
+            message: `ECAPA weights are missing at ${ecapa}. segmentation weights are missing at ${segmentation}. Run poddrill fetch-weights.`,
+          },
           waiting,
         ],
         summaries: [],
       });
-      assert.equal(await episodeUntil(root, episodeId, "failed"), failed);
+      assert.equal(await episodeUntil(root, episodeId, "failed", weightEnv), failed);
       await assertNoOwnerLockFiles(root);
 
       const tools = await mcpTools(root, [
         { id: 2, name: "episode", args: { episodeId } },
         { id: 3, name: "start", args: { path: "audio/clip.wav" } },
-      ]);
+      ], weightEnv);
       assert.equal(tools.get(2), failed);
       assert.equal(tools.get(3), line({ kind: "started", created: false, episode: runningEpisode }));
 
@@ -693,9 +709,9 @@ describe("poddrill cli", () => {
 
       await signalOwner(root, "SIGKILL");
       await waitUntilQuiet(root);
-      const restarted = await run(root, ["episode", episodeId]);
+      const restarted = await run(root, ["episode", episodeId], weightEnv);
       assert.equal(restarted.code, 0, restarted.stderr);
-      assert.equal(await episodeUntil(root, episodeId, "failed"), failed);
+      assert.equal(await episodeUntil(root, episodeId, "failed", weightEnv), failed);
       await assertNoOwnerLockFiles(root);
     } finally {
       await stopOwner(root);
@@ -722,7 +738,7 @@ describe("poddrill cli", () => {
       };
       await writeFile(join(dir, "episode.json"), `${JSON.stringify(manifest, null, 2)}\n`);
       await writeFile(join(dir, "transcript", "transcript.vtt"), "WEBVTT\n");
-      await writeFile(join(dir, "embedding", "embedding.json"), "{\"stretches\":[]}\n");
+      await writeFile(join(dir, "embedding", "embedding.json"), "{\"turns\":[]}\n");
       await writeFile(join(dir, "groups.json"), "{\"cues\":[]}\n");
       const read = await run(root, ["episode", episodeId]);
       assert.equal(read.code, 0, read.stderr);

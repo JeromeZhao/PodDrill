@@ -77,6 +77,7 @@ interface Seed {
 function hosts(): {
   readonly whistle: { transcribeSlice: () => Promise<never> };
   readonly embed: { prepare: () => Promise<void>; embedStretch: () => Promise<never> };
+  readonly diarize: { prepare: () => Promise<void>; diarize: () => Promise<never> };
 } {
   return {
     whistle: {
@@ -85,6 +86,10 @@ function hosts(): {
     embed: {
       prepare: () => Promise.resolve(),
       embedStretch: () => Promise.reject(new Error("embed should not run")),
+    },
+    diarize: {
+      prepare: () => Promise.resolve(),
+      diarize: () => Promise.reject(new Error("diarize should not run")),
     },
   };
 }

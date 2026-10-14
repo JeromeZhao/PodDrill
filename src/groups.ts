@@ -1,9 +1,5 @@
-/**
- * Speaker groups over stretch vectors. The cut is the widest gap in the
- * average-linkage cosines, not a fixed threshold.
- */
-
 import { asRecord } from "./disk.ts";
+import type { Turn } from "./turns.ts";
 
 const UNGROUPED = "ungrouped";
 
@@ -12,12 +8,6 @@ export interface CueText {
   readonly startMs: number;
   readonly endMs: number;
   readonly text: string;
-}
-
-export interface StretchVector {
-  readonly startMs: number;
-  readonly endMs: number;
-  readonly vector: readonly number[];
 }
 
 type Nearest =
@@ -50,12 +40,6 @@ export type CuePage =
   | { readonly kind: "unknown-group"; readonly groupId: string }
   | { readonly kind: "unknown-cue"; readonly cueId: string };
 
-interface Merge {
-  readonly cosine: number;
-  readonly left: readonly number[];
-  readonly right: readonly number[];
-}
-
 const TIME =
   /^(\d{2}):(\d{2}):(\d{2})\.(\d{3}) --> (\d{2}):(\d{2}):(\d{2})\.(\d{3})$/;
 
@@ -86,83 +70,46 @@ export function readVttCues(vtt: string): readonly CueText[] {
   return cues;
 }
 
-export function readStretchVectors(value: unknown): readonly StretchVector[] | undefined {
-  const record = asRecord(value);
-  if (record === undefined || !Array.isArray(record["stretches"])) {
-    return undefined;
-  }
-  const parsed: StretchVector[] = [];
-  let width: number | undefined;
-  for (const item of record["stretches"]) {
-    const stretch = asRecord(item);
-    if (stretch === undefined) {
-      return undefined;
-    }
-    const startMs = stretch["startMs"];
-    const endMs = stretch["endMs"];
-    const vector = finiteVector(stretch["vector"]);
-    if (typeof startMs !== "number" || typeof endMs !== "number" || vector === undefined) {
-      return undefined;
-    }
-    if (width === undefined) {
-      width = vector.length;
-    }
-    if (vector.length !== width) {
-      return undefined;
-    }
-    parsed.push({ startMs, endMs, vector });
-  }
-  return parsed;
-}
-
 export function assignCues(
   cues: readonly CueText[],
-  stretches: readonly StretchVector[],
+  turns: readonly Turn[],
+  centroids: readonly (readonly number[])[],
 ): readonly CueAssignment[] {
-  const stretchOfCue = cues.map((cue) => stretchCovering(stretches, cue.startMs));
-  const used: number[] = [];
-  for (const index of stretchOfCue) {
-    if (index !== undefined && !used.includes(index)) {
-      used.push(index);
+  const speakerOfCue = cues.map((cue) => overlappingSpeaker(turns, cue.startMs, cue.endMs));
+  const members = new Map<number, CueText[]>();
+  for (let index = 0; index < cues.length; index += 1) {
+    const speaker = speakerOfCue[index];
+    const cue = cues[index];
+    if (speaker === undefined || cue === undefined) {
+      continue;
+    }
+    const list = members.get(speaker);
+    if (list === undefined) {
+      members.set(speaker, [cue]);
+    } else {
+      list.push(cue);
     }
   }
-  const vectors = used.flatMap((index) => {
-    const stretch = stretches[index];
-    return stretch === undefined ? [] : [stretch.vector];
-  });
-  const groupOfStretch = new Map<number, string>();
-  const centroids = new Map<string, readonly number[]>();
-  for (const cluster of clusterVectors(vectors)) {
-    const original = cluster.flatMap((compact) => {
-      const index = used[compact];
-      return index === undefined ? [] : [index];
-    });
-    const memberCues = cues.filter((_, cueIndex) => {
-      const stretchIndex = stretchOfCue[cueIndex];
-      return stretchIndex !== undefined && original.includes(stretchIndex);
-    });
-    const first = memberCues[0];
-    if (first === undefined) {
+  const groupOfSpeaker = new Map<number, string>();
+  const centroidOfGroup = new Map<string, readonly number[]>();
+  for (const [speaker, groupCues] of members) {
+    const first = groupCues[0];
+    const centroid = centroids[speaker];
+    if (first === undefined || centroid === undefined) {
       continue;
     }
     const groupId = `g${first.id}`;
-    for (const index of original) {
-      groupOfStretch.set(index, groupId);
-    }
-    const memberVectors = original.flatMap((index) => {
-      const stretch = stretches[index];
-      return stretch === undefined ? [] : [stretch.vector];
-    });
-    centroids.set(groupId, meanVector(memberVectors));
+    groupOfSpeaker.set(speaker, groupId);
+    centroidOfGroup.set(groupId, centroid);
   }
-  return cues.map((cue, cueIndex) => {
-    const stretchIndex = stretchOfCue[cueIndex];
-    const groupId = stretchIndex === undefined ? undefined : groupOfStretch.get(stretchIndex);
-    const vector = stretchIndex === undefined ? undefined : stretches[stretchIndex]?.vector;
-    if (groupId === undefined || vector === undefined) {
+  return cues.map((cue, index) => {
+    const speaker = speakerOfCue[index];
+    const groupId = speaker === undefined ? undefined : groupOfSpeaker.get(speaker);
+    const centroid = speaker === undefined ? undefined : centroids[speaker];
+    if (groupId === undefined || centroid === undefined) {
       return { id: cue.id, groupId: UNGROUPED, nearestGroupId: null, nearestCosine: null };
     }
-    return { id: cue.id, groupId, ...nearestGroup(vector, groupId, centroids) };
+    return { id: cue.id, groupId, ...nearestGroup(centroid, groupId, centroidOfGroup) };
   });
 }
 
@@ -374,173 +321,17 @@ function readNullableNumber(value: unknown): number | null | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function finiteVector(value: unknown): readonly number[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-  const numbers: number[] = [];
-  for (const item of value) {
-    if (typeof item !== "number" || !Number.isFinite(item)) {
-      return undefined;
-    }
-    numbers.push(item);
-  }
-  return numbers;
-}
-
-function stretchCovering(stretches: readonly StretchVector[], startMs: number): number | undefined {
-  for (let index = 0; index < stretches.length; index += 1) {
-    const stretch = stretches[index];
-    if (stretch !== undefined && startMs >= stretch.startMs && startMs < stretch.endMs) {
-      return index;
+function overlappingSpeaker(turns: readonly Turn[], startMs: number, endMs: number): number | undefined {
+  let bestSpeaker: number | undefined;
+  let bestOverlap = 0;
+  for (const turn of turns) {
+    const overlap = Math.min(endMs, turn.endMs) - Math.max(startMs, turn.startMs);
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap;
+      bestSpeaker = turn.speaker;
     }
   }
-  return undefined;
-}
-
-function clusterVectors(vectors: readonly (readonly number[])[]): readonly (readonly number[])[] {
-  if (vectors.length === 0) {
-    return [];
-  }
-  const merges = averageLinkageMerges(vectors);
-  const cutoff = highSide(merges);
-  const kept = cutoff === undefined ? [] : merges.filter((merge) => merge.cosine >= cutoff);
-  return components(vectors.length, kept);
-}
-
-function averageLinkageMerges(vectors: readonly (readonly number[])[]): readonly Merge[] {
-  let clusters: { readonly members: readonly number[] }[] = vectors.map((_, index) => ({
-    members: [index],
-  }));
-  const merges: Merge[] = [];
-  while (clusters.length > 1) {
-    let bestI = 0;
-    let bestJ = 1;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < clusters.length; i += 1) {
-      for (let j = i + 1; j < clusters.length; j += 1) {
-        const left = clusters[i];
-        const right = clusters[j];
-        if (left === undefined || right === undefined) {
-          continue;
-        }
-        const score = averageCosine(left.members, right.members, vectors);
-        if (score > bestScore) {
-          bestScore = score;
-          bestI = i;
-          bestJ = j;
-        }
-      }
-    }
-    const left = clusters[bestI];
-    const right = clusters[bestJ];
-    if (left === undefined || right === undefined) {
-      break;
-    }
-    merges.push({ cosine: bestScore, left: left.members, right: right.members });
-    const merged = { members: [...left.members, ...right.members] };
-    const next = clusters.filter((_, index) => index !== bestI && index !== bestJ);
-    next.push(merged);
-    clusters = next;
-  }
-  return merges;
-}
-
-/**
- * The high side is that merge's own cosine. Rounding it to a tenth would drop a
- * merge that still sits above the gap. A lone merge has no low side to refuse.
- * Equal gaps keep the higher cut.
- */
-function highSide(merges: readonly Merge[]): number | undefined {
-  if (merges.length === 0) {
-    return undefined;
-  }
-  const ordered = [...merges].sort((left, right) => right.cosine - left.cosine);
-  const first = ordered[0];
-  if (first === undefined) {
-    return undefined;
-  }
-  if (ordered.length === 1) {
-    return first.cosine;
-  }
-  let widest = -1;
-  let high = first.cosine;
-  for (let index = 0; index < ordered.length - 1; index += 1) {
-    const current = ordered[index];
-    const next = ordered[index + 1];
-    if (current === undefined || next === undefined) {
-      continue;
-    }
-    const gap = current.cosine - next.cosine;
-    if (gap > widest) {
-      widest = gap;
-      high = current.cosine;
-    }
-  }
-  return high;
-}
-
-function components(count: number, merges: readonly Merge[]): readonly (readonly number[])[] {
-  const parent = Array.from({ length: count }, (_, index) => index);
-  const find = (index: number): number => {
-    let cursor = index;
-    const seen: number[] = [];
-    for (;;) {
-      const next = parent[cursor];
-      if (next === undefined || next === cursor) {
-        for (const item of seen) {
-          parent[item] = cursor;
-        }
-        return cursor;
-      }
-      seen.push(cursor);
-      cursor = next;
-    }
-  };
-  for (const merge of merges) {
-    const left = merge.left[0];
-    const right = merge.right[0];
-    if (left === undefined || right === undefined) {
-      continue;
-    }
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) {
-      parent[rightRoot] = leftRoot;
-    }
-  }
-  const grouped = new Map<number, number[]>();
-  for (let index = 0; index < count; index += 1) {
-    const root = find(index);
-    const members = grouped.get(root);
-    if (members === undefined) {
-      grouped.set(root, [index]);
-    } else {
-      members.push(index);
-    }
-  }
-  return [...grouped.values()];
-}
-
-function averageCosine(
-  left: readonly number[],
-  right: readonly number[],
-  vectors: readonly (readonly number[])[],
-): number {
-  let total = 0;
-  let count = 0;
-  for (const leftIndex of left) {
-    for (const rightIndex of right) {
-      const leftVector = vectors[leftIndex];
-      const rightVector = vectors[rightIndex];
-      if (leftVector === undefined || rightVector === undefined) {
-        continue;
-      }
-      total += cosine(leftVector, rightVector);
-      count += 1;
-    }
-  }
-  return count === 0 ? 0 : total / count;
+  return bestSpeaker;
 }
 
 function nearestGroup(
@@ -564,24 +355,6 @@ function nearestGroup(
     return { nearestGroupId: null, nearestCosine: null };
   }
   return { nearestGroupId: bestId, nearestCosine: bestScore };
-}
-
-function meanVector(vectors: readonly (readonly number[])[]): readonly number[] {
-  const first = vectors[0];
-  if (first === undefined || vectors.length === 0) {
-    return [];
-  }
-  const sum = Array.from({ length: first.length }, () => 0);
-  for (const vector of vectors) {
-    for (let index = 0; index < sum.length; index += 1) {
-      const current = sum[index];
-      const value = vector[index];
-      if (current !== undefined && value !== undefined) {
-        sum[index] = current + value;
-      }
-    }
-  }
-  return sum.map((value) => value / vectors.length);
 }
 
 function cosine(left: readonly number[], right: readonly number[]): number {

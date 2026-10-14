@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 
 import { clientMain, workspaceSetupCollision } from "./client.ts";
 import { asRecord, errorCode, pathExists } from "./disk.ts";
+import { segmentationWeightsPath } from "./diarize.ts";
 import { embedWeightsPath } from "./embed.ts";
 import { isModelId, type ModelFleet, type ModelId, type ModelWeights } from "./models.ts";
 import { nodeInstallMessage, nodeMeetsMinimum } from "./node-version.ts";
 import { callOwner, ownerAlive, proxyMcp, pythonForOwner, render, serve } from "./owner.ts";
 import { readPackageIdentity } from "./package-identity.ts";
 import { installPython } from "./python-env.ts";
-import { fetchEcapa } from "./weights.ts";
+import { fetchWeights } from "./weights.ts";
 import { defaultWorkspacePath, resolveWorkspace, setupWorkspace, type SetupResult } from "./workspace.ts";
 
 const usage = [
@@ -358,7 +359,7 @@ async function runInstallPython(): Promise<void> {
 }
 
 async function runFetchWeights(): Promise<void> {
-  const fetched = await fetchEcapa(embedWeightsPath(process.env));
+  const fetched = await fetchWeights(embedWeightsPath(process.env), segmentationWeightsPath(process.env));
   await emit(render({ kind: "ready", ...fetched }), 0);
 }
 
@@ -369,7 +370,7 @@ async function runBootstrap(args: readonly string[]): Promise<void> {
     await emit(render({ kind: "error", message: usage }), 1);
   }
   const installed = await installPython(process.env, import.meta.url);
-  const weights = await fetchEcapa(embedWeightsPath(process.env));
+  const weights = await fetchWeights(embedWeightsPath(process.env), segmentationWeightsPath(process.env));
   const root = await workspaceArg();
   const alive = await ownerAlive(root);
   const result = await setupWorkspace({
@@ -642,7 +643,7 @@ function helpText(): string {
     "  setup --provider <id> --queue-length <n> [--fleet-limit <n>] [--embedding-limit <n>]",
     "        [--model-fleet <id>=<count>] [--model-weights <id>=<path>] [--python <path>]",
     "  install-python     create ~/.cache/poddrill/venv and install pinned Python packages",
-    "  fetch-weights      download the pinned ECAPA file and check its sha256",
+    "  fetch-weights      download the pinned ECAPA and segmentation files and check their sha256",
     "  bootstrap [--provider <id>] [--queue-length <n>]",
     "                     install-python, fetch-weights, then setup",
     "  start <path> [--language <code>]",

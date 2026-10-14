@@ -25,10 +25,10 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from "nod
 
 import { cutSlice, probeDurationMs } from "./audio.ts";
 import { asRecord, errorCode, pathExists, readJsonFile } from "./disk.ts";
+import type { DiarizeCall } from "./diarize.ts";
 import type { EmbedCall } from "./embed.ts";
 import {
   parseWhistle,
-  planSlices,
   projectSlices,
   serializeWhistle,
   type PlannedSlice,
@@ -44,16 +44,15 @@ import {
   parseLabelUpdates,
   readAssignments,
   readLabels,
-  readStretchVectors,
   readVttCues,
   type CueRow,
-  type StretchVector,
   type CueText,
   type StoredLabel,
 } from "./groups.ts";
 import { fleetSize, modelForLanguage } from "./models.ts";
 import { transcriptRefusal, type WhistleCall } from "./provider.ts";
-import { planStretches, readCueSpans } from "./stretch.ts";
+import { planRegions } from "./regions.ts";
+import { parseSpeakerTracks, type SpeakerTracks } from "./turns.ts";
 import {
   dumpSummary,
   emptySummary,
@@ -76,7 +75,6 @@ import {
   episodeLayout,
   parseEpisodeId,
   sliceFiles,
-  stretchWav,
   workspaceDirs,
   type ArtifactKind,
   type ArtifactLayout,
@@ -186,6 +184,7 @@ type Rejected = Extract<StartResult, { readonly kind: "rejected" }>;
 export interface StoreHosts {
   readonly whistle: WhistleCall;
   readonly embed: EmbedCall;
+  readonly diarize: DiarizeCall;
 }
 
 /** An artifact runs only after the one it names here is ready. */
@@ -720,6 +719,13 @@ export class JobQueue {
     };
   }
 
+  private setPlan(id: EpisodeId, plan: readonly PlannedSlice[]): void {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.entries.set(id, { ...entry, plan });
+    }
+  }
+
   private setArtifact(id: EpisodeId, kind: ArtifactKind, progress: ArtifactProgress): void {
     const entry = this.entries.get(id);
     if (entry !== undefined) {
@@ -820,12 +826,11 @@ export class JobQueue {
       await rm(staging, { recursive: true, force: true });
       throw error;
     }
-    const plan = planSlices(durationMs);
     const entry: EpisodeEntry = {
       manifest,
-      plan,
+      plan: [],
       artifacts: {
-        transcript: { kind: "pending", done: 0, total: plan.length },
+        transcript: { kind: "pending", done: 0, total: 0 },
         embedding: { kind: "pending", done: 0, total: 0 },
       },
     };
@@ -879,7 +884,6 @@ export class JobQueue {
     const { entry, layout, signal } = run;
     const artifact = layout.artifacts.transcript;
     const source = join(layout.dir, entry.manifest.sourceFile);
-    const total = entry.plan.length;
     const model = modelForLanguage(entry.manifest.language);
     if (model === undefined) {
       throw new Error(`unknown language ${entry.manifest.language}`);
@@ -888,8 +892,15 @@ export class JobQueue {
     if (refusal !== undefined) {
       throw new Error(refusal);
     }
+    const tracks = await this.ensureTracks(run);
+    if (tracks === undefined) {
+      return false;
+    }
+    const plan = planRegions(tracks.turns);
+    this.setPlan(entry.manifest.episodeId, plan);
     await mkdir(artifact.workDir, { recursive: true });
-    const todo = await missingSlices(layout, entry.plan);
+    const todo = await missingSlices(layout, plan);
+    const total = plan.length;
     let done = total - todo.length;
     run.report(done, total);
     const outcome = await runLanes(todo, fleetSize(model.id, this.config), signal, async (slice) => {
@@ -920,7 +931,7 @@ export class JobQueue {
       return false;
     }
     const records = await Promise.all(
-      entry.plan.map(async (slice): Promise<SliceRecord> => {
+      plan.map(async (slice): Promise<SliceRecord> => {
         const files = sliceFiles(layout, slice.index);
         const whistle = parseWhistle(JSON.parse(await readFile(files.whistlePath, "utf8")));
         return { plan: slice, slicePath: files.wavPath, whistle };
@@ -932,65 +943,45 @@ export class JobQueue {
 
   private async embed(run: StageRun): Promise<boolean> {
     const { layout, signal } = run;
+    const tracks = parseSpeakerTracks(await readJsonFile(layout.turns));
+    if (tracks === undefined) {
+      throw new Error(`could not read ${layout.turns}`);
+    }
     const transcript = await readFile(layout.artifacts.transcript.output, "utf8");
-    const stretches = await this.ensureStretchVectors(run, transcript);
-    if (stretches === undefined) {
+    const assignments = assignCues(readVttCues(transcript), tracks.turns, tracks.centroids);
+    await mkdir(layout.artifacts.embedding.dir, { recursive: true });
+    const wrote = await commitFile(layout.artifacts.embedding.output, signal, (temp) =>
+      writeFile(temp, `${JSON.stringify({ turns: tracks.turns }, null, 2)}\n`),
+    );
+    if (!wrote) {
       return false;
     }
-    const assignments = assignCues(readVttCues(transcript), stretches);
     return commitFile(layout.groups, signal, (temp) =>
       writeFile(temp, `${JSON.stringify({ cues: assignments }, null, 2)}\n`),
     );
   }
 
-  private async ensureStretchVectors(
-    run: StageRun,
-    transcript: string,
-  ): Promise<readonly StretchVector[] | undefined> {
-    const { entry, layout, signal } = run;
-    const artifact = layout.artifacts.embedding;
-    if (await pathExists(artifact.output)) {
-      const stored = readStretchVectors(await readJsonFile(artifact.output));
-      if (stored === undefined) {
-        throw new Error(`could not read ${artifact.output}`);
-      }
-      run.report(stored.length, stored.length);
-      return stored;
+  private async ensureTracks(run: StageRun): Promise<SpeakerTracks | undefined> {
+    const { layout, signal } = run;
+    const existing = parseSpeakerTracks(await readJsonFile(layout.turns));
+    if (existing !== undefined) {
+      return existing;
     }
-    const source = join(layout.dir, entry.manifest.sourceFile);
-    await this.hosts.embed.prepare();
-    const stretches = planStretches(readCueSpans(transcript));
-    await mkdir(artifact.workDir, { recursive: true });
-    const vectors = new Map<number, readonly number[]>();
-    run.report(0, stretches.length);
-    const outcome = await runLanes(stretches, this.config.embeddingLimit, signal, async (stretch) => {
-      const wavPath = stretchWav(layout, stretch.index);
-      if (!(await pathExists(wavPath))) {
-        const cut = await commitFile(wavPath, signal, (temp) => cutSlice(source, stretch, temp));
-        if (!cut) {
-          return false;
-        }
-      }
-      vectors.set(stretch.index, await this.hosts.embed.embedStretch(wavPath));
-      run.report(vectors.size, stretches.length);
-      return true;
-    });
-    if (!finished(outcome)) {
+    const source = join(layout.dir, run.entry.manifest.sourceFile);
+    await this.hosts.diarize.prepare();
+    const tracks = await this.hosts.diarize.diarize(source);
+    await mkdir(layout.artifacts.transcript.dir, { recursive: true });
+    const wrote = await commitFile(layout.turns, signal, (temp) =>
+      writeFile(
+        temp,
+        `${JSON.stringify({ turns: tracks.turns, centroids: tracks.centroids }, null, 2)}\n`,
+      ),
+    );
+    if (!wrote) {
       return undefined;
     }
-    const body = {
-      stretches: stretches.map((stretch) => {
-        const vector = vectors.get(stretch.index);
-        if (vector === undefined) {
-          throw new Error(`stretch ${stretch.index} has no vector`);
-        }
-        return { startMs: stretch.startMs, endMs: stretch.endMs, vector };
-      }),
-    };
-    const wrote = await commitFile(artifact.output, signal, (temp) =>
-      writeFile(temp, `${JSON.stringify(body)}\n`),
-    );
-    return wrote ? body.stretches : undefined;
+    await rm(layout.artifacts.transcript.workDir, { recursive: true, force: true });
+    return tracks;
   }
 
   private async fail(
@@ -1246,7 +1237,8 @@ async function loadEpisode(root: WorkspaceRoot, id: EpisodeId): Promise<EpisodeE
   if (manifest === undefined) {
     return undefined;
   }
-  const plan = planSlices(manifest.durationMs);
+  const tracks = parseSpeakerTracks(await readJsonFile(layout.turns));
+  const plan = tracks === undefined ? [] : planRegions(tracks.turns);
   let slicesDone = 0;
   for (const slice of plan) {
     if (await pathExists(sliceFiles(layout, slice.index).whistlePath)) {

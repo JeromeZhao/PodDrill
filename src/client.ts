@@ -5,13 +5,14 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 
 import { asRecord, errorCode, pathExists } from "./disk.ts";
+import { segmentationWeightsPath } from "./diarize.ts";
 import { embedWeightsPath } from "./embed.ts";
 import { MIN_NODE, nodeFixCommand, nodeInstallMessage, nodeMeetsMinimum } from "./node-version.ts";
 import { readPackageIdentity, type PackageIdentity } from "./package-identity.ts";
 import { providerTransport, refuseUnwiredTransport } from "./provider.ts";
 import { INSTALL_PYTHON_FIX, NUMPY_PIN, ONNXRUNTIME_PIN, resolvePython, ytDlpFix } from "./python-env.ts";
 import { defaultWorkspacePath, readConfig, resolveWorkspace } from "./workspace.ts";
-import { digestStatus, ecapaSpec, FETCH_WEIGHTS_FIX } from "./weights.ts";
+import { digestStatus, ecapaSpec, FETCH_WEIGHTS_FIX, segmentationSpec } from "./weights.ts";
 
 const serverName = "poddrill";
 
@@ -39,6 +40,7 @@ interface LauncherEnv {
   readonly PODDRILL_PYTHON: string;
   readonly PODDRILL_WORKSPACE: string;
   readonly PODDRILL_EMBED_WEIGHTS: string;
+  readonly PODDRILL_SEGMENTATION_WEIGHTS: string;
 }
 
 interface Launcher {
@@ -171,6 +173,14 @@ type DoctorCheck =
   | { readonly name: "ecapa"; readonly state: "ok"; readonly path: string }
   | {
       readonly name: "ecapa";
+      readonly state: "bad";
+      readonly path: string;
+      readonly detail: string;
+      readonly fix: string;
+    }
+  | { readonly name: "segmentation"; readonly state: "ok"; readonly path: string }
+  | {
+      readonly name: "segmentation";
       readonly state: "bad";
       readonly path: string;
       readonly detail: string;
@@ -591,6 +601,7 @@ async function launcherFor(
       PODDRILL_PYTHON: python,
       PODDRILL_WORKSPACE: defaultWorkspacePath(env),
       PODDRILL_EMBED_WEIGHTS: embedWeightsPath(env),
+      PODDRILL_SEGMENTATION_WEIGHTS: segmentationWeightsPath(env),
     },
   };
 }
@@ -1028,6 +1039,7 @@ function checkFailed(check: DoctorCheck): boolean {
     case "numpy":
     case "onnxruntime":
     case "ecapa":
+    case "segmentation":
     case "workspace":
       return check.state === "bad";
     case "yt-dlp":
@@ -1103,9 +1115,10 @@ async function runtimeProbes(
   const numpy = await packageCheck(env, python, "numpy", "numpy", NUMPY_PIN);
   const onnxruntime = await packageCheck(env, python, "onnxruntime", "onnxruntime", ONNXRUNTIME_PIN);
   const ecapa = await ecapaCheck(env);
+  const segmentation = await segmentationCheck(env);
   const workspace = await workspaceCheck(env);
   const ytdlp = await ytDlpCheck(env, python);
-  return [node, ffmpeg, needle, numpy, onnxruntime, ecapa, workspace, ytdlp];
+  return [node, ffmpeg, needle, numpy, onnxruntime, ecapa, segmentation, workspace, ytdlp];
 }
 
 function nodeCheck(): DoctorCheck {
@@ -1179,6 +1192,19 @@ async function ecapaCheck(env: Readonly<Record<string, string | undefined>>): Pr
       ? "ECAPA weights are missing"
       : "ECAPA weights do not match the pinned WeSpeaker file";
   return { name: "ecapa", state: "bad", path: weights, detail, fix: FETCH_WEIGHTS_FIX };
+}
+
+async function segmentationCheck(env: Readonly<Record<string, string | undefined>>): Promise<DoctorCheck> {
+  const weights = segmentationWeightsPath(env);
+  const status = await digestStatus(weights, segmentationSpec);
+  if (status === "match") {
+    return { name: "segmentation", state: "ok", path: weights };
+  }
+  const detail =
+    status === "missing"
+      ? "segmentation weights are missing"
+      : "segmentation weights do not match the pinned file";
+  return { name: "segmentation", state: "bad", path: weights, detail, fix: FETCH_WEIGHTS_FIX };
 }
 
 const SETUP_FIX = "poddrill setup --provider localhost --queue-length 4";
@@ -1333,7 +1359,13 @@ function envMatches(value: unknown, env: LauncherEnv): boolean {
   if (record === undefined) {
     return false;
   }
-  const keys = ["PATH", "PODDRILL_PYTHON", "PODDRILL_WORKSPACE", "PODDRILL_EMBED_WEIGHTS"] as const;
+  const keys = [
+    "PATH",
+    "PODDRILL_PYTHON",
+    "PODDRILL_WORKSPACE",
+    "PODDRILL_EMBED_WEIGHTS",
+    "PODDRILL_SEGMENTATION_WEIGHTS",
+  ] as const;
   if (Object.keys(record).length !== keys.length) {
     return false;
   }
@@ -1716,6 +1748,7 @@ function mergeCursor(current: string | undefined, launcher: Launcher): string | 
       PODDRILL_PYTHON: launcher.env.PODDRILL_PYTHON,
       PODDRILL_WORKSPACE: launcher.env.PODDRILL_WORKSPACE,
       PODDRILL_EMBED_WEIGHTS: launcher.env.PODDRILL_EMBED_WEIGHTS,
+      PODDRILL_SEGMENTATION_WEIGHTS: launcher.env.PODDRILL_SEGMENTATION_WEIGHTS,
     },
   };
   if (current === undefined || current.trim() === "") {
@@ -1777,6 +1810,7 @@ function desiredGrokBlock(launcher: Launcher): string {
     `PODDRILL_PYTHON = "${escapeToml(launcher.env.PODDRILL_PYTHON)}"`,
     `PODDRILL_WORKSPACE = "${escapeToml(launcher.env.PODDRILL_WORKSPACE)}"`,
     `PODDRILL_EMBED_WEIGHTS = "${escapeToml(launcher.env.PODDRILL_EMBED_WEIGHTS)}"`,
+    `PODDRILL_SEGMENTATION_WEIGHTS = "${escapeToml(launcher.env.PODDRILL_SEGMENTATION_WEIGHTS)}"`,
     "",
   ].join("\n");
 }

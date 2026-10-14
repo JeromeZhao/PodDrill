@@ -43,7 +43,6 @@ export interface WorkspaceConfig {
   /** Absolute interpreter path recorded by setup. Absent on older files. */
   readonly python?: string;
   /**
-   * Most embedding processes the running embedding may use, and most stretches it keeps in flight.
    * Integer, at least 1. A file written without the field reads as 1.
    */
   readonly embeddingLimit: number;
@@ -69,6 +68,7 @@ export interface EpisodeLayout {
   readonly manifest: string;
   /** Speaker groups. The embedding stage writes this after `embedding.json`. */
   readonly groups: string;
+  readonly turns: string;
   /** Names and marks for those groups. Absent until a label write. */
   readonly labels: string;
   readonly summaries: string;
@@ -262,6 +262,7 @@ export function episodeLayout(root: WorkspaceRoot, id: EpisodeId): EpisodeLayout
     dir,
     manifest: join(dir, "episode.json"),
     groups: join(dir, "groups.json"),
+    turns: join(dir, "transcript", "turns.json"),
     labels: join(dir, "labels.json"),
     summaries: join(dir, "summaries"),
     audit: join(dir, "audit.jsonl"),
@@ -279,11 +280,6 @@ export function sliceFiles(layout: EpisodeLayout, index: number): SliceFiles {
     wavPath: join(workDir, `${name}.wav`),
     whistlePath: join(workDir, `${name}.whistle.json`),
   };
-}
-
-/** `embedding/work/0007.wav` for stretch 7. */
-export function stretchWav(layout: EpisodeLayout, index: number): string {
-  return join(layout.artifacts.embedding.workDir, `${workName(index)}.wav`);
 }
 
 export function episodeIdFromDigest(sha256Hex: string): EpisodeId {
